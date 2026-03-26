@@ -1,0 +1,3 @@
+[submodule "STM32_Firmware/DSDL_Generator/libcanard"]
+	path = STM32_Firmware/DSDL_Generator/libcanard
+	url = https://github.com/DroneCAN/libcanard
