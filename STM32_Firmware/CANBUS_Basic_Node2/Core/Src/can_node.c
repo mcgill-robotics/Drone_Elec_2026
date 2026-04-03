@@ -1,5 +1,7 @@
 #include "can_node.h"
+#include "stm32g431xx.h"
 #include "stm32g4xx_hal.h"
+#include "stm32g4xx_hal_gpio.h"
 #include "uavcan.protocol.dynamic_node_id.Allocation.h"
 #include <canard.h>
 #include <dronecan_msgs.h>
@@ -9,7 +11,26 @@
 //  Configuration
 // ============================================================
 
+// Set to 0 for dynamic node ID allocation (required for multi-node bus)
+#define MY_NODE_ID        0
 #define PREFERRED_NODE_ID 73
+
+// This device controls ESC channels [ESC_CHANNEL_OFFSET] and [ESC_CHANNEL_OFFSET + 1].
+// Set a different value per device so they don't overlap:
+//   Device 0: ESC_CHANNEL_OFFSET 0  → channels 0, 1
+//   Device 1: ESC_CHANNEL_OFFSET 2  → channels 2, 3
+//   Device 2: ESC_CHANNEL_OFFSET 4  → channels 4, 5
+#define ESC_CHANNEL_OFFSET  0
+#define ESC_COUNT           2
+
+// ESC output range expected by your hardware (e.g. 1000–2000 µs)
+// RawCommand values from PX4 are in range [-8192, 8191]
+// Adjust mapping in esc_raw_to_pwm() as needed.
+#define ESC_PWM_MIN_US      1000
+#define ESC_PWM_MAX_US      2000
+
+// How often to send ESC status back to PX4 (milliseconds)
+#define ESC_STATUS_PERIOD_MS  50
 
 // ============================================================
 //  Libcanard
@@ -29,7 +50,48 @@ static FDCAN_HandleTypeDef *_hfdcan;
 // ============================================================
 
 static struct uavcan_protocol_NodeStatus node_status;
-static uint64_t next_1hz_at_us = 0;
+static uint64_t next_1hz_at_us    = 0;
+static uint32_t next_esc_status_ms = 0;
+
+// ============================================================
+//  ESC state
+// ============================================================
+
+// Last commanded values from PX4, range [-8192, 8191]
+static int16_t esc_raw_cmd[ESC_COUNT] = {0, 0};
+
+// ============================================================
+//  ESC output — replace body with your PWM/DSHOT driver
+// ============================================================
+
+static uint16_t esc_raw_to_pwm(int16_t raw)
+{
+    // raw is [-8192 .. 8191], map to [ESC_PWM_MIN_US .. ESC_PWM_MAX_US]
+    // Clamp to [0, 8191] for unidirectional ESCs (most drone ESCs)
+    if (raw < 0) raw = 0;
+    uint32_t pwm = ESC_PWM_MIN_US +
+                   ((uint32_t)raw * (ESC_PWM_MAX_US - ESC_PWM_MIN_US)) / 8191;
+    return (uint16_t)pwm;
+}
+
+// Called whenever new ESC commands are received.
+// Replace the body with your actual PWM/DSHOT output calls.
+static void esc_set_output(uint8_t esc_index, int16_t raw_value)
+{
+    uint16_t pwm_us = esc_raw_to_pwm(raw_value);
+
+    if (esc_index == 0){
+
+        if (pwm_us > 1500) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_11, GPIO_PIN_SET); 
+        else HAL_GPIO_WritePin(GPIOB, GPIO_PIN_11, GPIO_PIN_RESET);
+    }
+
+    if (esc_index == 1){
+        if (pwm_us > 1500) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_SET); 
+        else HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET);
+    }
+
+}
 
 // ============================================================
 //  DWT microsecond timer
@@ -73,6 +135,7 @@ static void get_unique_id(uint8_t id[16])
     uid[2] = HAL_GetUIDw2();
     memcpy(id, uid, 12);
 }
+
 // ============================================================
 //  RX — polled
 // ============================================================
@@ -95,8 +158,6 @@ static void process_rx(void)
 
         CanardCANFrame frame;
         frame.id       = rx_header.Identifier | CANARD_CAN_FRAME_EFF;
-
-        // Directly map datalength to data_len, does not need any conversion
         frame.data_len = rx_header.DataLength;
         memcpy(frame.data, rx_data, frame.data_len);
 
@@ -141,6 +202,74 @@ static void process_tx(void)
 }
 
 // ============================================================
+//  ESC RawCommand handler
+//
+//  PX4 broadcasts uavcan.equipment.esc.RawCommand (data type ID 1030)
+//  containing up to 20 throttle values in [-8192, 8191].
+//  We extract the two channels assigned to this device.
+// ============================================================
+
+static void handle_ESC_RawCommand(CanardInstance *ins,
+                                   CanardRxTransfer *transfer)
+{
+    (void)ins;
+
+    struct uavcan_equipment_esc_RawCommand cmd;
+    uavcan_equipment_esc_RawCommand_decode(transfer, &cmd);
+
+    for (uint8_t i = 0; i < ESC_COUNT; i++) {
+        uint8_t ch = ESC_CHANNEL_OFFSET + i;
+        if (ch < cmd.cmd.len) {
+            esc_raw_cmd[i] = cmd.cmd.data[ch];
+        } else {
+            // Channel not present in this packet — safe disarm
+            esc_raw_cmd[i] = 0;
+        }
+        esc_set_output(i, esc_raw_cmd[i]);
+    }
+}
+
+// ============================================================
+//  ESC Status broadcast
+//
+//  PX4 requires periodic uavcan.equipment.esc.Status to mark
+//  ESCs as alive. Broadcast one message per physical ESC.
+// ============================================================
+
+static void send_esc_status(void)
+{
+    static uint8_t transfer_id = 0;
+
+    for (uint8_t i = 0; i < ESC_COUNT; i++) {
+        struct uavcan_equipment_esc_Status status;
+        memset(&status, 0, sizeof(status));
+
+        status.esc_index    = ESC_CHANNEL_OFFSET + i;
+
+        // Not measured so set to zero
+        status.voltage      = 0.0;
+        status.current      = 0.0;
+        status.temperature  = 0.0;
+        status.rpm          = 0;
+        // Map [-8192,8191] throttle to [0,100] power percent for telemetry
+        int32_t pct = ((int32_t)esc_raw_cmd[i] + 8192) * 100 / 16383;
+        status.power_rating_pct = (uint8_t)pct;
+        status.error_count  = 0;
+
+        uint8_t  buffer[UAVCAN_EQUIPMENT_ESC_STATUS_MAX_SIZE];
+        uint16_t len = uavcan_equipment_esc_Status_encode(&status, buffer);
+
+        canardBroadcast(&canard,
+                        UAVCAN_EQUIPMENT_ESC_STATUS_SIGNATURE,
+                        UAVCAN_EQUIPMENT_ESC_STATUS_ID,
+                        &transfer_id,
+                        CANARD_TRANSFER_PRIORITY_LOW,
+                        buffer,
+                        len);
+    }
+}
+
+// ============================================================
 //  DroneCAN service handlers
 // ============================================================
 
@@ -159,7 +288,8 @@ static void handle_GetNodeInfo(CanardInstance *ins, CanardRxTransfer *transfer)
     pkt.hardware_version.minor = 0;
     get_unique_id(pkt.hardware_version.unique_id);
 
-    const char *name = "com.example.stm32_node";
+    // Name encodes the channel offset so you can identify devices in PX4
+    char name[50];
     strncpy((char *)pkt.name.data, name, sizeof(pkt.name.data));
     pkt.name.len = strlen(name);
 
@@ -176,79 +306,62 @@ static void handle_GetNodeInfo(CanardInstance *ins, CanardRxTransfer *transfer)
                            total_size);
 }
 
-
 // ============================================================
 //  Dynamic ID allocation
 // ============================================================
 
-// Dynamic node id struct
 static struct {
     uint32_t send_next_node_id_allocation_request_at_ms;
     uint32_t node_id_allocation_unique_id_offset;
 } DNA;
 
-// Node allocation
 static void handle_DNA_Allocation(CanardInstance *ins, CanardRxTransfer *transfer)
 {
     if (canardGetLocalNodeID(&canard) != CANARD_BROADCAST_NODE_ID) {
-        // already allocated
         return;
     }
 
-    // Rule C - updating the randomized time interval
     DNA.send_next_node_id_allocation_request_at_ms =
         millis32() + UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_MIN_REQUEST_PERIOD_MS +
-        ( HAL_GetTick() % UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_MAX_FOLLOWUP_DELAY_MS);
+        (HAL_GetTick() % UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_MAX_FOLLOWUP_DELAY_MS);
 
     if (transfer->source_node_id == CANARD_BROADCAST_NODE_ID) {
         return;
     }
 
-    // Copying the unique ID from the message
     struct uavcan_protocol_dynamic_node_id_Allocation msg;
-
     uavcan_protocol_dynamic_node_id_Allocation_decode(transfer, &msg);
 
-    // Obtaining the local unique ID
     uint8_t my_unique_id[sizeof(msg.unique_id.data)];
     get_unique_id(my_unique_id);
 
-    // Matching the received UID against the local one
     if (memcmp(msg.unique_id.data, my_unique_id, msg.unique_id.len) != 0) {
-        // No match, return
         return;
     }
 
     if (msg.unique_id.len < sizeof(msg.unique_id.data)) {
-        // The allocator has confirmed part of unique ID, switching to
-        // the next stage and updating the timeout.
         DNA.node_id_allocation_unique_id_offset = msg.unique_id.len;
-        DNA.send_next_node_id_allocation_request_at_ms -= UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_MIN_REQUEST_PERIOD_MS;
-
+        DNA.send_next_node_id_allocation_request_at_ms -=
+            UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_MIN_REQUEST_PERIOD_MS;
     } else {
-        // Allocation complete - copying the allocated node ID from the message
         canardSetLocalNodeID(ins, msg.node_id);
     }
 }
 
-/*
-  ask for a dynamic node allocation
- */
-static void request_DNA()
+static void request_DNA(void)
 {
     const uint32_t now = millis32();
     static uint8_t node_id_allocation_transfer_id = 0;
+
     DNA.send_next_node_id_allocation_request_at_ms =
         now + UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_MIN_REQUEST_PERIOD_MS +
         (HAL_GetTick() % UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_MAX_FOLLOWUP_DELAY_MS);
 
-    // Structure of the request is documented in the DSDL definition
-    // See http://uavcan.org/Specification/6._Application_level_functions/#dynamic-node-id-allocation
     uint8_t allocation_request[CANARD_CAN_FRAME_MAX_DATA_LEN - 1];
     allocation_request[0] = (uint8_t)(PREFERRED_NODE_ID << 1U);
 
     if (DNA.node_id_allocation_unique_id_offset == 0) {
-        allocation_request[0] |= 1;     // First part of unique ID
+        allocation_request[0] |= 1;
     }
 
     uint8_t my_unique_id[16];
@@ -256,22 +369,21 @@ static void request_DNA()
 
     static const uint8_t MaxLenOfUniqueIDInRequest = 6;
     uint8_t uid_size = (uint8_t)(16 - DNA.node_id_allocation_unique_id_offset);
-    
     if (uid_size > MaxLenOfUniqueIDInRequest) {
         uid_size = MaxLenOfUniqueIDInRequest;
     }
 
-    memmove(&allocation_request[1], &my_unique_id[DNA.node_id_allocation_unique_id_offset], uid_size);
+    memmove(&allocation_request[1],
+            &my_unique_id[DNA.node_id_allocation_unique_id_offset],
+            uid_size);
 
-    // Broadcasting the request
     canardBroadcast(&canard,
                     UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_SIGNATURE,
                     UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_ID,
                     &node_id_allocation_transfer_id,
                     CANARD_TRANSFER_PRIORITY_LOW,
                     &allocation_request[0],
-                    (uint16_t) (uid_size + 1));
-
+                    (uint16_t)(uid_size + 1));
 }
 
 // ============================================================
@@ -290,11 +402,19 @@ static void on_transfer_received(CanardInstance *ins, CanardRxTransfer *transfer
         }
     }
 
-    if (transfer->transfer_type == CanardTransferTypeBroadcast){
-        switch(transfer->data_type_id){
-            case UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_ID: {
-                handle_DNA_Allocation(ins, transfer);
+    if (transfer->transfer_type == CanardTransferTypeBroadcast) {
+        switch (transfer->data_type_id) {
+        case UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_ID:
+            handle_DNA_Allocation(ins, transfer);
+            break;
+        case UAVCAN_EQUIPMENT_ESC_RAWCOMMAND_ID:
+            // Only handle ESC commands once we have a node ID
+            if (canardGetLocalNodeID(&canard) != CANARD_BROADCAST_NODE_ID) {
+                handle_ESC_RawCommand(ins, transfer);
             }
+            break;
+        default:
+            break;
         }
     }
 }
@@ -318,14 +438,18 @@ static bool should_accept_transfer(const CanardInstance *ins,
     }
 
     if (transfer_type == CanardTransferTypeBroadcast) {
-        // see if we want to handle a specific broadcast packet
         switch (data_type_id) {
-            case UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_ID: {
-                *out_data_type_signature = UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_SIGNATURE;
-                return true;
-            }
+        case UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_ID:
+            *out_data_type_signature = UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_SIGNATURE;
+            return true;
+        case UAVCAN_EQUIPMENT_ESC_RAWCOMMAND_ID:
+            *out_data_type_signature = UAVCAN_EQUIPMENT_ESC_RAWCOMMAND_SIGNATURE;
+            return true;
+        default:
+            break;
         }
     }
+
     return false;
 }
 
@@ -367,12 +491,18 @@ static void process_1hz_tasks(uint64_t ts_usec)
 
 void can_node_init(FDCAN_HandleTypeDef *hfdcan)
 {
-
     timing_init();
 
     _hfdcan = hfdcan;
 
     DNA.send_next_node_id_allocation_request_at_ms = millis32();
+    DNA.node_id_allocation_unique_id_offset        = 0;
+
+    // Safe state: disarm all outputs at startup
+    for (uint8_t i = 0; i < ESC_COUNT; i++) {
+        esc_raw_cmd[i] = 0;
+        esc_set_output(i, 0);
+    }
 
     canardInit(&canard,
                memory_pool,
@@ -381,14 +511,16 @@ void can_node_init(FDCAN_HandleTypeDef *hfdcan)
                should_accept_transfer,
                NULL);
 
+#if MY_NODE_ID > 0
+    canardSetLocalNodeID(&canard, MY_NODE_ID);
+#endif
 
     HAL_FDCAN_Start(_hfdcan);
-    // No notification needed for polling — FIFO fill level is checked directly
 }
 
 void can_node_update(void)
 {
-    process_rx(); 
+    process_rx();
     process_tx();
 
     uint64_t ts = micros64();
@@ -397,17 +529,18 @@ void can_node_update(void)
         process_1hz_tasks(ts);
     }
 
-
+    // DNA phase — do not send ESC status until we have a node ID
     if (canardGetLocalNodeID(&canard) == CANARD_BROADCAST_NODE_ID) {
-        // waiting for DNA
-    }
-
-    // see if we are still doing DNA
-    if (canardGetLocalNodeID(&canard) == CANARD_BROADCAST_NODE_ID) {
-        // we're still waiting for a DNA allocation of our node ID
         if (millis32() > DNA.send_next_node_id_allocation_request_at_ms) {
             request_DNA();
         }
         return;
+    }
+
+    // Periodic ESC status feedback to PX4
+    uint32_t now_ms = millis32();
+    if (now_ms >= next_esc_status_ms) {
+        next_esc_status_ms = now_ms + ESC_STATUS_PERIOD_MS;
+        send_esc_status();
     }
 }
