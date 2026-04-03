@@ -9,8 +9,6 @@
 //  Configuration
 // ============================================================
 
-// When set to zero it runs dynamic id
-#define MY_NODE_ID  0
 #define PREFERRED_NODE_ID 73
 
 // ============================================================
@@ -75,17 +73,6 @@ static void get_unique_id(uint8_t id[16])
     uid[2] = HAL_GetUIDw2();
     memcpy(id, uid, 12);
 }
-
-// ============================================================
-//  HAL DLC constant → byte count
-//  HAL encodes DLC as (n << 16), e.g. FDCAN_DLC_BYTES_8 = 0x00080000
-// ============================================================
-
-static inline uint8_t dlc_to_bytes(uint32_t dlc)
-{
-    return (uint8_t)(dlc >> 16);
-}
-
 // ============================================================
 //  RX — polled
 // ============================================================
@@ -108,7 +95,9 @@ static void process_rx(void)
 
         CanardCANFrame frame;
         frame.id       = rx_header.Identifier | CANARD_CAN_FRAME_EFF;
-        frame.data_len = dlc_to_bytes(rx_header.DataLength); // <-- fixed
+
+        // Directly map datalength to data_len, does not need any conversion
+        frame.data_len = rx_header.DataLength;
         memcpy(frame.data, rx_data, frame.data_len);
 
         canardHandleRxFrame(&canard, &frame, micros64());
@@ -378,11 +367,12 @@ static void process_1hz_tasks(uint64_t ts_usec)
 
 void can_node_init(FDCAN_HandleTypeDef *hfdcan)
 {
+
+    timing_init();
+
     _hfdcan = hfdcan;
 
     DNA.send_next_node_id_allocation_request_at_ms = millis32();
-
-    timing_init();
 
     canardInit(&canard,
                memory_pool,
