@@ -1,4 +1,6 @@
 #include "can_node.h"
+#include "stm32g4xx_hal.h"
+#include "uavcan.protocol.dynamic_node_id.Allocation.h"
 #include <canard.h>
 #include <dronecan_msgs.h>
 #include <string.h>
@@ -7,7 +9,9 @@
 //  Configuration
 // ============================================================
 
-#define MY_NODE_ID  42
+// When set to zero it runs dynamic id
+#define MY_NODE_ID  0
+#define PREFERRED_NODE_ID 73
 
 // ============================================================
 //  Libcanard
@@ -52,6 +56,10 @@ static uint64_t micros64(void)
     last_cycles = now;
 
     return (upper | (uint64_t)now) / (SystemCoreClock / 1000000ULL);
+}
+
+static uint32_t millis32(void) {
+    return micros64() / 1000ULL;
 }
 
 // ============================================================
@@ -179,6 +187,104 @@ static void handle_GetNodeInfo(CanardInstance *ins, CanardRxTransfer *transfer)
                            total_size);
 }
 
+
+// ============================================================
+//  Dynamic ID allocation
+// ============================================================
+
+// Dynamic node id struct
+static struct {
+    uint32_t send_next_node_id_allocation_request_at_ms;
+    uint32_t node_id_allocation_unique_id_offset;
+} DNA;
+
+// Node allocation
+static void handle_DNA_Allocation(CanardInstance *ins, CanardRxTransfer *transfer)
+{
+    if (canardGetLocalNodeID(&canard) != CANARD_BROADCAST_NODE_ID) {
+        // already allocated
+        return;
+    }
+
+    // Rule C - updating the randomized time interval
+    DNA.send_next_node_id_allocation_request_at_ms =
+        millis32() + UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_MIN_REQUEST_PERIOD_MS +
+        ( HAL_GetTick() % UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_MAX_FOLLOWUP_DELAY_MS);
+
+    if (transfer->source_node_id == CANARD_BROADCAST_NODE_ID) {
+        return;
+    }
+
+    // Copying the unique ID from the message
+    struct uavcan_protocol_dynamic_node_id_Allocation msg;
+
+    uavcan_protocol_dynamic_node_id_Allocation_decode(transfer, &msg);
+
+    // Obtaining the local unique ID
+    uint8_t my_unique_id[sizeof(msg.unique_id.data)];
+    get_unique_id(my_unique_id);
+
+    // Matching the received UID against the local one
+    if (memcmp(msg.unique_id.data, my_unique_id, msg.unique_id.len) != 0) {
+        // No match, return
+        return;
+    }
+
+    if (msg.unique_id.len < sizeof(msg.unique_id.data)) {
+        // The allocator has confirmed part of unique ID, switching to
+        // the next stage and updating the timeout.
+        DNA.node_id_allocation_unique_id_offset = msg.unique_id.len;
+        DNA.send_next_node_id_allocation_request_at_ms -= UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_MIN_REQUEST_PERIOD_MS;
+
+    } else {
+        // Allocation complete - copying the allocated node ID from the message
+        canardSetLocalNodeID(ins, msg.node_id);
+    }
+}
+
+/*
+  ask for a dynamic node allocation
+ */
+static void request_DNA()
+{
+    const uint32_t now = millis32();
+    static uint8_t node_id_allocation_transfer_id = 0;
+    DNA.send_next_node_id_allocation_request_at_ms =
+        now + UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_MIN_REQUEST_PERIOD_MS +
+        (HAL_GetTick() % UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_MAX_FOLLOWUP_DELAY_MS);
+
+    // Structure of the request is documented in the DSDL definition
+    // See http://uavcan.org/Specification/6._Application_level_functions/#dynamic-node-id-allocation
+    uint8_t allocation_request[CANARD_CAN_FRAME_MAX_DATA_LEN - 1];
+    allocation_request[0] = (uint8_t)(PREFERRED_NODE_ID << 1U);
+
+    if (DNA.node_id_allocation_unique_id_offset == 0) {
+        allocation_request[0] |= 1;     // First part of unique ID
+    }
+
+    uint8_t my_unique_id[16];
+    get_unique_id(my_unique_id);
+
+    static const uint8_t MaxLenOfUniqueIDInRequest = 6;
+    uint8_t uid_size = (uint8_t)(16 - DNA.node_id_allocation_unique_id_offset);
+    
+    if (uid_size > MaxLenOfUniqueIDInRequest) {
+        uid_size = MaxLenOfUniqueIDInRequest;
+    }
+
+    memmove(&allocation_request[1], &my_unique_id[DNA.node_id_allocation_unique_id_offset], uid_size);
+
+    // Broadcasting the request
+    canardBroadcast(&canard,
+                    UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_SIGNATURE,
+                    UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_ID,
+                    &node_id_allocation_transfer_id,
+                    CANARD_TRANSFER_PRIORITY_LOW,
+                    &allocation_request[0],
+                    (uint16_t) (uid_size + 1));
+
+}
+
 // ============================================================
 //  Libcanard callbacks
 // ============================================================
@@ -192,6 +298,14 @@ static void on_transfer_received(CanardInstance *ins, CanardRxTransfer *transfer
             break;
         default:
             break;
+        }
+    }
+
+    if (transfer->transfer_type == CanardTransferTypeBroadcast){
+        switch(transfer->data_type_id){
+            case UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_ID: {
+                handle_DNA_Allocation(ins, transfer);
+            }
         }
     }
 }
@@ -211,6 +325,16 @@ static bool should_accept_transfer(const CanardInstance *ins,
             return true;
         default:
             break;
+        }
+    }
+
+    if (transfer_type == CanardTransferTypeBroadcast) {
+        // see if we want to handle a specific broadcast packet
+        switch (data_type_id) {
+            case UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_ID: {
+                *out_data_type_signature = UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_SIGNATURE;
+                return true;
+            }
         }
     }
     return false;
@@ -256,6 +380,8 @@ void can_node_init(FDCAN_HandleTypeDef *hfdcan)
 {
     _hfdcan = hfdcan;
 
+    DNA.send_next_node_id_allocation_request_at_ms = millis32();
+
     timing_init();
 
     canardInit(&canard,
@@ -265,7 +391,6 @@ void can_node_init(FDCAN_HandleTypeDef *hfdcan)
                should_accept_transfer,
                NULL);
 
-    canardSetLocalNodeID(&canard, MY_NODE_ID);
 
     HAL_FDCAN_Start(_hfdcan);
     // No notification needed for polling — FIFO fill level is checked directly
@@ -273,12 +398,26 @@ void can_node_init(FDCAN_HandleTypeDef *hfdcan)
 
 void can_node_update(void)
 {
-    process_rx();
+    process_rx(); 
     process_tx();
 
     uint64_t ts = micros64();
     if (ts >= next_1hz_at_us) {
         next_1hz_at_us = ts + 1000000ULL;
         process_1hz_tasks(ts);
+    }
+
+
+    if (canardGetLocalNodeID(&canard) == CANARD_BROADCAST_NODE_ID) {
+        // waiting for DNA
+    }
+
+    // see if we are still doing DNA
+    if (canardGetLocalNodeID(&canard) == CANARD_BROADCAST_NODE_ID) {
+        // we're still waiting for a DNA allocation of our node ID
+        if (millis32() > DNA.send_next_node_id_allocation_request_at_ms) {
+            request_DNA();
+        }
+        return;
     }
 }
