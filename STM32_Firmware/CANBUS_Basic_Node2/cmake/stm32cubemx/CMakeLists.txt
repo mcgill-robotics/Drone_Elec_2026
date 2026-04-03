@@ -15,6 +15,13 @@ set(MX_Include_Dirs
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Drivers/STM32G4xx_HAL_Driver/Inc/Legacy
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Drivers/CMSIS/Device/ST/STM32G4xx/Include
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Drivers/CMSIS/Include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Library/Canard/
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Library/UAVCAN_DSDL/include/
+)
+
+# All DSDL files
+file(GLOB DSDL_Src
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Library/UAVCAN_DSDL/src/*.c
 )
 
 # STM32CubeMX generated application sources
@@ -25,6 +32,9 @@ set(MX_Application_Src
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/sysmem.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/syscalls.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../startup_stm32g431xx.s
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Library/Canard/canard.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/can_node.c
+    ${DSDL_Src}
 )
 
 # STM32 HAL/LL Drivers

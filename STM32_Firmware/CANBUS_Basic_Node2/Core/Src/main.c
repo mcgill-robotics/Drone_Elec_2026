@@ -18,12 +18,10 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "stm32_hal_legacy.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "can_node.h"
-
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -97,50 +95,16 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  
-  
-    /* * Initializing the CAN backend driver; in this example we're using SocketCAN
-     */
-    SocketCANInstance socketcan;
-    const char* const can_iface_name = argv[1];
-    int16_t res = socketcanInit(&socketcan, can_iface_name);
-    if (res < 0) {
-        (void)fprintf(stderr, "Failed to open CAN iface '%s'\n", can_iface_name);
-        return 1;
-    }
 
-    /*
-     Initializing the Libcanard instance.
-     */
-    canardInit(&canard,
-               memory_pool,
-               sizeof(memory_pool),
-               onTransferReceived,
-               shouldAcceptTransfer,
-               NULL);
+  can_node_init(&hfdcan1);
 
-    canardSetLocalNodeID(&canard, MY_NODE_ID);
-
-    /*
-      Run the main loop.
-     */
-    uint64_t next_1hz_service_at = micros64();
   while (1)
   {
-    processTxRxOnce(&socketcan, 10);
-
-    const uint64_t ts = micros64();
-
-    if (ts >= next_1hz_service_at) {
-        next_1hz_service_at += 1000000ULL;
-        process1HzTasks(ts);
-    }
-  
+    can_node_update();
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
   }
-    return 0;
   /* USER CODE END 3 */
 }
 
@@ -211,10 +175,10 @@ static void MX_FDCAN1_Init(void)
   hfdcan1.Init.AutoRetransmission = DISABLE;
   hfdcan1.Init.TransmitPause = DISABLE;
   hfdcan1.Init.ProtocolException = DISABLE;
-  hfdcan1.Init.NominalPrescaler = 16;
+  hfdcan1.Init.NominalPrescaler = 17;
   hfdcan1.Init.NominalSyncJumpWidth = 1;
-  hfdcan1.Init.NominalTimeSeg1 = 1;
-  hfdcan1.Init.NominalTimeSeg2 = 1;
+  hfdcan1.Init.NominalTimeSeg1 = 7;
+  hfdcan1.Init.NominalTimeSeg2 = 2;
   hfdcan1.Init.DataPrescaler = 1;
   hfdcan1.Init.DataSyncJumpWidth = 1;
   hfdcan1.Init.DataTimeSeg1 = 1;
