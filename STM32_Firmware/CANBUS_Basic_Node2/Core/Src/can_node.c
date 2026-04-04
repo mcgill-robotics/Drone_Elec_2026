@@ -11,6 +11,8 @@
 //  Configuration
 // ============================================================
 
+extern TIM_HandleTypeDef htim4;
+
 // Set to 0 for dynamic node ID allocation (required for multi-node bus)
 #define MY_NODE_ID        0
 #define PREFERRED_NODE_ID 73
@@ -68,26 +70,26 @@ static uint16_t esc_raw_to_pwm(int16_t raw)
 {
     // raw is [-8192 .. 8191], map to [ESC_PWM_MIN_US .. ESC_PWM_MAX_US]
     // Clamp to [0, 8191] for unidirectional ESCs (most drone ESCs)
-    if (raw < 0) raw = 0;
+    if (raw < 0) raw = -raw;
     uint32_t pwm = ESC_PWM_MIN_US +
                    ((uint32_t)raw * (ESC_PWM_MAX_US - ESC_PWM_MIN_US)) / 8191;
     return (uint16_t)pwm;
 }
 
 // Called whenever new ESC commands are received.
-// Replace the body with your actual PWM/DSHOT output calls.
 static void esc_set_output(uint8_t esc_index, int16_t raw_value)
 {
-    uint16_t pwm_us = esc_raw_to_pwm(raw_value);
+    uint16_t ccr = esc_raw_to_pwm(raw_value) * 60714 / 2500;
 
     if (esc_index == 0){
-
-        if (pwm_us > 1500) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_11, GPIO_PIN_SET); 
+        __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, ccr);
+        if (ccr > 30000) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_11, GPIO_PIN_SET); 
         else HAL_GPIO_WritePin(GPIOB, GPIO_PIN_11, GPIO_PIN_RESET);
     }
 
     if (esc_index == 1){
-        if (pwm_us > 1500) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_SET); 
+        __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_2, ccr);
+        if (ccr > 30000) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_SET); 
         else HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET);
     }
 
