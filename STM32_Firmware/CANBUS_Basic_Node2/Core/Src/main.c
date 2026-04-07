@@ -101,11 +101,15 @@ int main(void)
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
 
+  // Initialize can
   can_node_init(&hfdcan1);
+
+  // Initialize motor pwm
   HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_1);
   HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_2);
   while (1)
   {
+    // Can handling
     can_node_update();
     /* USER CODE END WHILE */
 

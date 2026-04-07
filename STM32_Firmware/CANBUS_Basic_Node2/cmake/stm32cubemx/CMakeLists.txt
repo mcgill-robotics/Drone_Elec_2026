@@ -17,6 +17,7 @@ set(MX_Include_Dirs
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Drivers/CMSIS/Include
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Library/Canard/
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Library/UAVCAN_DSDL/include/
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Library/can_node/Inc
 )
 
 # All DSDL files
@@ -33,7 +34,7 @@ set(MX_Application_Src
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/syscalls.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../startup_stm32g431xx.s
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Library/Canard/canard.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/can_node.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Library/can_node/Src/can_node.c
     ${DSDL_Src}
 )
 

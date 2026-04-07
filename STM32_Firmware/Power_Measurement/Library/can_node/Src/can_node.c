@@ -1,7 +1,6 @@
 #include "can_node.h"
 #include "stm32g431xx.h"
 #include "stm32g4xx_hal.h"
-#include "stm32g4xx_hal_gpio.h"
 #include "uavcan.protocol.dynamic_node_id.Allocation.h"
 #include <canard.h>
 #include <dronecan_msgs.h>
@@ -11,28 +10,35 @@
 //  Configuration
 // ============================================================
 
-extern TIM_HandleTypeDef htim4;
-
-// Set to 0 for dynamic node ID allocation (required for multi-node bus)
+// Set to 0 for dynamic node ID allocation
 #define MY_NODE_ID        0
 #define PREFERRED_NODE_ID 73
 
-// This device controls ESC channels [ESC_CHANNEL_OFFSET] and [ESC_CHANNEL_OFFSET + 1].
-// Set a different value per device so they don't overlap:
-//   Device 0: ESC_CHANNEL_OFFSET 0  → channels 0, 1
-//   Device 1: ESC_CHANNEL_OFFSET 2  → channels 2, 3
-//   Device 2: ESC_CHANNEL_OFFSET 4  → channels 4, 5
-#define ESC_CHANNEL_OFFSET  0
-#define ESC_COUNT           2
+// How often to send BatteryInfo (milliseconds)
+// PX4 expects at least 1 Hz; 2 Hz is a reasonable default
+#define BATTERY_STATUS_PERIOD_MS  500
 
-// ESC output range expected by your hardware (e.g. 1000–2000 µs)
-// RawCommand values from PX4 are in range [-8192, 8191]
-// Adjust mapping in esc_raw_to_pwm() as needed.
-#define ESC_PWM_MIN_US      1000
-#define ESC_PWM_MAX_US      2000
+// Number of battery packs (pairs of cells in series)
+// Each pack has: 2 voltage sensors summed, 1 current sensor
+#define BATTERY_COUNT  3
 
-// How often to send ESC status back to PX4 (milliseconds)
-#define ESC_STATUS_PERIOD_MS  50
+// ============================================================
+//  Sensor input — implement these to read your ADC values
+// ============================================================
+
+// Return voltage in Volts for sensor index [0..5]
+// Sensors 0,1 → pack 0 (series pair)
+// Sensors 2,3 → pack 1
+// Sensors 4,5 → pack 2
+extern float battery_get_cell_voltage(uint8_t sensor_index);
+
+// Return current in Amps for sensor index [0..2]
+// One current sensor per pack
+extern float battery_get_current(uint8_t sensor_index);
+
+// Return temperature in Kelvin (or NaN if not available)
+// Return UAVCAN_EQUIPMENT_POWER_BATTERYINFO_STATUS_FLAG_TEMP_HOT etc. flags if needed
+extern float battery_get_temperature(uint8_t pack_index);
 
 // ============================================================
 //  Libcanard
@@ -52,48 +58,8 @@ static FDCAN_HandleTypeDef *_hfdcan;
 // ============================================================
 
 static struct uavcan_protocol_NodeStatus node_status;
-static uint64_t next_1hz_at_us    = 0;
-static uint32_t next_esc_status_ms = 0;
-
-// ============================================================
-//  ESC state
-// ============================================================
-
-// Last commanded values from PX4, range [-8192, 8191]
-static int16_t esc_raw_cmd[ESC_COUNT] = {0, 0};
-
-// ============================================================
-//  ESC output — replace body with your PWM/DSHOT driver
-// ============================================================
-
-static uint16_t esc_raw_to_pwm(int16_t raw)
-{
-    // raw is [-8192 .. 8191], map to [ESC_PWM_MIN_US .. ESC_PWM_MAX_US]
-    // Clamp to [0, 8191] for unidirectional ESCs (most drone ESCs)
-    if (raw < 0) raw = -raw;
-    uint32_t pwm = ESC_PWM_MIN_US +
-                   ((uint32_t)raw * (ESC_PWM_MAX_US - ESC_PWM_MIN_US)) / 8191;
-    return (uint16_t)pwm;
-}
-
-// Called whenever new ESC commands are received.
-static void esc_set_output(uint8_t esc_index, int16_t raw_value)
-{
-    uint16_t ccr = esc_raw_to_pwm(raw_value) * 60714 / 2500;
-
-    if (esc_index == 0){
-        __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, ccr);
-        if (ccr > 30000) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_11, GPIO_PIN_SET); 
-        else HAL_GPIO_WritePin(GPIOB, GPIO_PIN_11, GPIO_PIN_RESET);
-    }
-
-    if (esc_index == 1){
-        __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_2, ccr);
-        if (ccr > 30000) HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_SET); 
-        else HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET);
-    }
-
-}
+static uint64_t next_1hz_at_us      = 0;
+static uint32_t next_battery_status_ms = 0;
 
 // ============================================================
 //  DWT microsecond timer
@@ -204,66 +170,63 @@ static void process_tx(void)
 }
 
 // ============================================================
-//  ESC RawCommand handler
+//  Battery status broadcast
 //
-//  PX4 broadcasts uavcan.equipment.esc.RawCommand (data type ID 1030)
-//  containing up to 20 throttle values in [-8192, 8191].
-//  We extract the two channels assigned to this device.
-// ============================================================
-
-static void handle_ESC_RawCommand(CanardInstance *ins,
-                                   CanardRxTransfer *transfer)
-{
-    (void)ins;
-
-    struct uavcan_equipment_esc_RawCommand cmd;
-    uavcan_equipment_esc_RawCommand_decode(transfer, &cmd);
-
-    for (uint8_t i = 0; i < ESC_COUNT; i++) {
-        uint8_t ch = ESC_CHANNEL_OFFSET + i;
-        if (ch < cmd.cmd.len) {
-            esc_raw_cmd[i] = cmd.cmd.data[ch];
-        } else {
-            // Channel not present in this packet — safe disarm
-            esc_raw_cmd[i] = 0;
-        }
-        esc_set_output(i, esc_raw_cmd[i]);
-    }
-}
-
-// ============================================================
-//  ESC Status broadcast
+//  Sends uavcan.equipment.power.BatteryInfo for each of the
+//  3 battery packs. Each pack is two cells in series:
+//    voltage = cell[2*i] + cell[2*i + 1]
+//    current = current_sensor[i]
 //
-//  PX4 requires periodic uavcan.equipment.esc.Status to mark
-//  ESCs as alive. Broadcast one message per physical ESC.
+//  PX4 differentiates packs by battery_id (0, 1, 2).
 // ============================================================
 
-static void send_esc_status(void)
+static void send_battery_status(void)
 {
     static uint8_t transfer_id = 0;
 
-    for (uint8_t i = 0; i < ESC_COUNT; i++) {
-        struct uavcan_equipment_esc_Status status;
-        memset(&status, 0, sizeof(status));
+    for (uint8_t i = 0; i < BATTERY_COUNT; i++) {
+        struct uavcan_equipment_power_BatteryInfo pkt;
+        memset(&pkt, 0, sizeof(pkt));
 
-        status.esc_index    = ESC_CHANNEL_OFFSET + i;
+        // Voltage: sum of the two series cells for this pack
+        // float v0 = battery_get_cell_voltage(i * 2);
+        // float v1 = battery_get_cell_voltage(i * 2 + 1);
+        pkt.voltage  = battery_get_cell_voltage(i * 2);
 
-        // Not measured so set to zero
-        status.voltage      = 0.0;
-        status.current      = 0.0;
-        status.temperature  = 0.0;
-        status.rpm          = 0;
-        // Map [-8192,8191] throttle to [0,100] power percent for telemetry
-        int32_t pct = ((int32_t)esc_raw_cmd[i] + 8192) * 100 / 16383;
-        status.power_rating_pct = (uint8_t)pct;
-        status.error_count  = 0;
+        // Current from this pack's dedicated sensor
+        pkt.current          = battery_get_current(i);
 
-        uint8_t  buffer[UAVCAN_EQUIPMENT_ESC_STATUS_MAX_SIZE];
-        uint16_t len = uavcan_equipment_esc_Status_encode(&status, buffer);
+        // Temperature (Kelvin); set to 0 if not available
+        pkt.temperature      = battery_get_temperature(i);
+
+        // Power consumed — integrate elsewhere and supply here if available,
+        // otherwise leave as 0 (unknown) and PX4 will estimate
+        pkt.full_charge_capacity_wh = 0.0f;  // Set if known (Wh)
+        pkt.remaining_capacity_wh   = 0.0f;  // Set if tracked
+
+        // State of charge: NaN / 0 tells PX4 to estimate from voltage
+        // Set to 0..1 if you have a fuel gauge
+        pkt.state_of_charge_pct              = 0;
+        pkt.state_of_charge_pct_stdev        = 127;  // 127 = unknown
+
+        // // Cell voltages: report the two individual cells
+        // pkt.cell_voltages.len         = 2;
+        // pkt.cell_voltages.data[0]     = v0;
+        // pkt.cell_voltages.data[1]     = v1;
+
+        // Pack identity — PX4 uses this to distinguish multiple batteries
+        pkt.battery_id = i;
+
+        // Status flags
+        pkt.status_flags =
+            UAVCAN_EQUIPMENT_POWER_BATTERYINFO_STATUS_FLAG_IN_USE;
+
+        uint8_t  buffer[UAVCAN_EQUIPMENT_POWER_BATTERYINFO_MAX_SIZE];
+        uint16_t len = uavcan_equipment_power_BatteryInfo_encode(&pkt, buffer);
 
         canardBroadcast(&canard,
-                        UAVCAN_EQUIPMENT_ESC_STATUS_SIGNATURE,
-                        UAVCAN_EQUIPMENT_ESC_STATUS_ID,
+                        UAVCAN_EQUIPMENT_POWER_BATTERYINFO_SIGNATURE,
+                        UAVCAN_EQUIPMENT_POWER_BATTERYINFO_ID,
                         &transfer_id,
                         CANARD_TRANSFER_PRIORITY_LOW,
                         buffer,
@@ -290,8 +253,7 @@ static void handle_GetNodeInfo(CanardInstance *ins, CanardRxTransfer *transfer)
     pkt.hardware_version.minor = 0;
     get_unique_id(pkt.hardware_version.unique_id);
 
-    // Name encodes the channel offset so you can identify devices in PX4
-    char name[50];
+    const char *name = "battery_monitor";
     strncpy((char *)pkt.name.data, name, sizeof(pkt.name.data));
     pkt.name.len = strlen(name);
 
@@ -409,12 +371,6 @@ static void on_transfer_received(CanardInstance *ins, CanardRxTransfer *transfer
         case UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_ID:
             handle_DNA_Allocation(ins, transfer);
             break;
-        case UAVCAN_EQUIPMENT_ESC_RAWCOMMAND_ID:
-            // Only handle ESC commands once we have a node ID
-            if (canardGetLocalNodeID(&canard) != CANARD_BROADCAST_NODE_ID) {
-                handle_ESC_RawCommand(ins, transfer);
-            }
-            break;
         default:
             break;
         }
@@ -443,9 +399,6 @@ static bool should_accept_transfer(const CanardInstance *ins,
         switch (data_type_id) {
         case UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_ID:
             *out_data_type_signature = UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_SIGNATURE;
-            return true;
-        case UAVCAN_EQUIPMENT_ESC_RAWCOMMAND_ID:
-            *out_data_type_signature = UAVCAN_EQUIPMENT_ESC_RAWCOMMAND_SIGNATURE;
             return true;
         default:
             break;
@@ -500,12 +453,6 @@ void can_node_init(FDCAN_HandleTypeDef *hfdcan)
     DNA.send_next_node_id_allocation_request_at_ms = millis32();
     DNA.node_id_allocation_unique_id_offset        = 0;
 
-    // Safe state: disarm all outputs at startup
-    for (uint8_t i = 0; i < ESC_COUNT; i++) {
-        esc_raw_cmd[i] = 0;
-        esc_set_output(i, 0);
-    }
-
     canardInit(&canard,
                memory_pool,
                sizeof(memory_pool),
@@ -531,7 +478,7 @@ void can_node_update(void)
         process_1hz_tasks(ts);
     }
 
-    // DNA phase — do not send ESC status until we have a node ID
+    // DNA phase — do not send battery status until we have a node ID
     if (canardGetLocalNodeID(&canard) == CANARD_BROADCAST_NODE_ID) {
         if (millis32() > DNA.send_next_node_id_allocation_request_at_ms) {
             request_DNA();
@@ -539,10 +486,10 @@ void can_node_update(void)
         return;
     }
 
-    // Periodic ESC status feedback to PX4
+    // Periodic battery status to PX4
     uint32_t now_ms = millis32();
-    if (now_ms >= next_esc_status_ms) {
-        next_esc_status_ms = now_ms + ESC_STATUS_PERIOD_MS;
-        send_esc_status();
+    if (now_ms >= next_battery_status_ms) {
+        next_battery_status_ms = now_ms + BATTERY_STATUS_PERIOD_MS;
+        send_battery_status();
     }
 }
