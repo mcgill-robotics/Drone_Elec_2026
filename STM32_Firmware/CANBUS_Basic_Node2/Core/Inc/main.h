@@ -32,6 +32,10 @@ extern "C" {
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "can_node.h"
+#include "can_esc.h"
+
+#define ESC_PWM_MIN_US 1000
+#define ESC_PWM_MAX_US 2000
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/

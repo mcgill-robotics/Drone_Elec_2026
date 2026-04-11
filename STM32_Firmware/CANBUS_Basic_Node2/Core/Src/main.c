@@ -21,7 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "can_node.h"
+#include "can_esc.h"
 #include "stm32g4xx_hal_tim.h"
 /* USER CODE END Includes */
 
@@ -60,6 +60,31 @@ static void MX_TIM4_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+// Convert can esc output to pwm
+uint16_t esc_raw_to_pwm(int16_t raw)
+{
+    // raw is [-8192 .. 8191], map to [ESC_PWM_MIN_US .. ESC_PWM_MAX_US]
+    // Clamp to [0, 8191] for unidirectional ESCs (most drone ESCs)
+    if (raw < 0) raw = -raw;
+    uint32_t pwm = ESC_PWM_MIN_US + ((uint32_t)raw * (ESC_PWM_MAX_US - ESC_PWM_MIN_US)) / 8191;
+    return (uint16_t)pwm;
+}
+
+// Called whenever new ESC commands are received.
+void esc_set_output(uint8_t esc_index, int16_t raw_value)
+{
+    uint16_t ccr = esc_raw_to_pwm(raw_value) * 60714 / 2500;
+
+    if (esc_index == 0){
+        __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, ccr);
+    }
+
+    if (esc_index == 1){
+        __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_2, ccr);
+    }
+
+}
 
 /* USER CODE END 0 */
 
@@ -109,8 +134,19 @@ int main(void)
   HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_2);
   while (1)
   {
+    // 10hz task 
+    send_esc_status();
+  
+    // 1hz task
+    can_node_1hz_tasks();
+
+    // 1hz task blink led
+    // To implement
+
     // Can handling
     can_node_update();
+
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */

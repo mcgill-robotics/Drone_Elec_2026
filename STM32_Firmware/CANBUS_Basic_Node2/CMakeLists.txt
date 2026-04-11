@@ -42,14 +42,29 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined library search paths
 )
 
+# All DSDL files
+file(GLOB DSDL_Src
+    Library/UAVCAN_DSDL/src/*.c
+)
+
+
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-    # Add user sources here
+
+    Library/Canard/canard.c
+    Library/can_node/Src/can_node.c
+    Library/can_node/Src/can_esc.c
+    ${DSDL_Src}
 )
 
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
+
+    Library/Canard/
+    Library/UAVCAN_DSDL/include/
+    Library/can_node/Inc 
+
 )
 
 # Add project symbols (macros)
