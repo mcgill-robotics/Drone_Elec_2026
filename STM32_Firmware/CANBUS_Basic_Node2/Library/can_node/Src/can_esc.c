@@ -1,3 +1,4 @@
+#include "can_node.h"
 #include <can_esc.h>
 
 
@@ -31,7 +32,6 @@ void handle_ESC_RawCommand(CanardInstance *ins, CanardRxTransfer *transfer)
             // Channel not present in this packet — safe disarm
             esc_raw_cmd[i] = 0;
         }
-        esc_set_output(i, esc_raw_cmd[i]);
     }
 }
 
@@ -66,8 +66,7 @@ void send_esc_status(void)
         uint8_t  buffer[UAVCAN_EQUIPMENT_ESC_STATUS_MAX_SIZE];
         uint16_t len = uavcan_equipment_esc_Status_encode(&status, buffer);
 
-        canardBroadcast(&canard,
-                        UAVCAN_EQUIPMENT_ESC_STATUS_SIGNATURE,
+        can_node_broadcast(UAVCAN_EQUIPMENT_ESC_STATUS_SIGNATURE,
                         UAVCAN_EQUIPMENT_ESC_STATUS_ID,
                         &transfer_id,
                         CANARD_TRANSFER_PRIORITY_LOW,
@@ -76,12 +75,3 @@ void send_esc_status(void)
     }
 }
 
-
-void set_all_to_zero(){
-    // Safe state: disarm all outputs at startup
-    for (uint8_t i = 0; i < ESC_COUNT; i++) {
-        esc_raw_cmd[i] = 0;
-        esc_set_output(i, 0);
-    }
-
-}

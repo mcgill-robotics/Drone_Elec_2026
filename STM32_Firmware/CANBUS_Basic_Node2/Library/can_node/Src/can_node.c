@@ -1,6 +1,5 @@
 #include "can_node.h"
 
-
 // ============================================================
 //  Libcanard
 // ============================================================
@@ -13,7 +12,6 @@ static CanardInstance canard;
 static uint8_t        memory_pool[1024];
 static FDCAN_HandleTypeDef *_hfdcan;
 static struct uavcan_protocol_NodeStatus node_status;
- 
 
 
 // ============================================================
@@ -34,33 +32,36 @@ static volatile struct {
     volatile uint16_t tail;   // read  by task
 } s_rx_ring;
 
-static inline bool ring_push(const CanRawFrame *f)
+static inline uint8_t ring_push(const CanRawFrame *f)
 {
     uint16_t next = (s_rx_ring.head + 1) % RX_QUEUE_DEPTH;
-    if (next == s_rx_ring.tail) return false;  // full — drop
+    if (next == s_rx_ring.tail) return 0;  // full — drop
     s_rx_ring.buf[s_rx_ring.head] = *f;
     s_rx_ring.head = next;
-    return true;
+    return 1;
 }
 
-static inline bool ring_pop(CanRawFrame *f)
+static inline uint8_t ring_pop(CanRawFrame *f)
 {
-    if (s_rx_ring.head == s_rx_ring.tail) return false;  // empty
+    if (s_rx_ring.head == s_rx_ring.tail) return 0;  // empty
     *f = s_rx_ring.buf[s_rx_ring.tail];
     s_rx_ring.tail = (s_rx_ring.tail + 1) % RX_QUEUE_DEPTH;
-    return true;
+    return 1;
 }
 
 
 // ============================================================
-//  Callback hooks (set by main.c)
+//  Callback hooks
 // ============================================================
 
-static can_isr_notify_fn s_rx_notify_fn = NULL;
-static can_tx_ready_fn   s_tx_ready_fn  = NULL;
+// Moving callbacks to main via function returning 1 or 0 then
+// the main function calling interupts accordingly
 
-void can_node_set_rx_notify(can_isr_notify_fn fn) { s_rx_notify_fn = fn; }
-void can_node_set_tx_ready(can_tx_ready_fn fn)    { s_tx_ready_fn  = fn; }
+// static can_isr_notify_fn s_rx_notify_fn = NULL;
+// static can_tx_ready_fn   s_tx_ready_fn  = NULL;
+
+// void can_node_set_rx_notify(can_isr_notify_fn fn) { s_rx_notify_fn = fn; }
+// void can_node_set_tx_ready(can_tx_ready_fn fn)    { s_tx_ready_fn  = fn; }
 
 
 // ============================================================
@@ -109,11 +110,10 @@ static void get_unique_id(uint8_t id[16])
 //  ISR entry point — called from HAL_FDCAN_RxFifo0Callback
 // ============================================================
 
-BaseType_t can_node_rx_isr(FDCAN_HandleTypeDef *hfdcan)
+void can_node_rx_isr(FDCAN_HandleTypeDef *hfdcan)
 {
     FDCAN_RxHeaderTypeDef hdr;
     CanRawFrame frame;
-    BaseType_t woken = pdFALSE;
 
     while (HAL_FDCAN_GetRxFifoFillLevel(hfdcan, FDCAN_RX_FIFO0) > 0) {
         if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0,
@@ -124,34 +124,30 @@ BaseType_t can_node_rx_isr(FDCAN_HandleTypeDef *hfdcan)
         frame.data_len = hdr.DataLength;
         ring_push(&frame);  // lock-free single-producer single-consumer
     }
-
-    // Fire the registered notify hook (wired to vTaskNotifyGiveFromISR in main.c)
-    if (s_rx_notify_fn) s_rx_notify_fn(&woken);
-    return woken;
 }
 
 // ============================================================
-//  Public polling functions (called from tasks in main.c)
+//  Public polling functions
 // ============================================================
 
 // Dequeue one frame and feed it to libcanard.
 // Returns true if a frame was processed; call in a loop until false.
 // Caller must hold the canard mutex.
-bool can_node_dequeue_and_process(void)
+uint8_t can_node_dequeue_and_process(void)
 {
     CanRawFrame raw;
-    if (!ring_pop(&raw)) return false;
+    if (!ring_pop(&raw)) return 0;
 
     CanardCANFrame frame;
     frame.id       = raw.id;
     frame.data_len = raw.data_len;
     memcpy(frame.data, raw.data, raw.data_len);
     canardHandleRxFrame(&canard, &frame, micros64());
-    return true;
+    return 1;
 }
 
 // Drain libcanard's TX queue into the FDCAN hardware FIFO.
-// Caller must hold the canard mutex.
+// Recommend using mutex and caller should have it (freertos)
 void can_node_flush_tx(void)
 {
     static const uint32_t dlc_table[9] = {
@@ -303,12 +299,13 @@ static void request_DNA(void)
 
 // DNA allocation poll — call from RX task after draining frames.
 // Caller must hold the canard mutex. Returns 1 once ID is assigned.
+// Returns 1 when address is not zero, 0 otherwise 
 int8_t can_node_poll_dna(void)
 {
-    if (canardGetLocalNodeID(&canard) != CANARD_BROADCAST_NODE_ID) return 1;
+    if (canardGetLocalNodeID(&canard) != 0) return 1;
     if (millis32() > DNA.send_next_node_id_allocation_request_at_ms) {
         request_DNA();
-        if (s_tx_ready_fn) s_tx_ready_fn();
+        return 2;
     }
     return 0;
 }
@@ -366,7 +363,7 @@ static bool should_accept_transfer(const CanardInstance *ins,
         switch (data_type_id) {
         case UAVCAN_PROTOCOL_GETNODEINFO_ID:
             *out_data_type_signature = UAVCAN_PROTOCOL_GETNODEINFO_REQUEST_SIGNATURE;
-            return true;
+            return 1;
         default:
             break;
         }
@@ -376,12 +373,12 @@ static bool should_accept_transfer(const CanardInstance *ins,
         switch (data_type_id) {
         case UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_ID:
             *out_data_type_signature = UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_SIGNATURE;
-            return true;
+            return 1;
 
         #ifdef USE_ESC 
         case UAVCAN_EQUIPMENT_ESC_RAWCOMMAND_ID:
             *out_data_type_signature = UAVCAN_EQUIPMENT_ESC_RAWCOMMAND_SIGNATURE;
-            return true;
+            return 1;
         #endif
 
         #ifdef USE_SERVO
@@ -393,7 +390,7 @@ static bool should_accept_transfer(const CanardInstance *ins,
         }
     }
 
-    return false;
+    return 0;
 }
 
 // ============================================================
@@ -419,9 +416,26 @@ void can_node_1hz_tasks(void)
                     &transfer_id,
                     CANARD_TRANSFER_PRIORITY_LOW,
                     buffer, len);
+}
 
-    // Signal TX — tx_ready_fn is safe to call from task context too
-    if (s_tx_ready_fn) s_tx_ready_fn();
+// ============================================================
+// External libcanard broadcast function
+// ============================================================
+
+void can_node_broadcast(uint64_t data_type_signature,
+                        uint16_t data_type_id,
+                        uint8_t *inout_transfer_id,
+                        uint8_t priority,
+                        const void *payload,
+                        uint16_t payload_len)
+{
+    canardBroadcast(&canard,
+                    data_type_signature,
+                    data_type_id,
+                    inout_transfer_id,
+                    priority,
+                    payload,
+                    payload_len);
 }
 
 // ============================================================
@@ -445,7 +459,8 @@ void can_node_init(FDCAN_HandleTypeDef *hfdcan)
     canardSetLocalNodeID(&canard, MY_NODE_ID);
 #endif
 
-    HAL_FDCAN_ActivateNotification(_hfdcan,
-        FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);
-    HAL_FDCAN_Start(_hfdcan);
+    // Moved outside library
+    // HAL_FDCAN_ActivateNotification(_hfdcan,
+    //     FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);
+    // HAL_FDCAN_Start(_hfdcan);
 }

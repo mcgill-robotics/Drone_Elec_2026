@@ -3,7 +3,7 @@
 #include "stm32g4xx_hal.h"
 
 // Private file include
-#include <canard.h>
+#include <can_node.h>
 #include <dronecan_msgs.h>
 
 
@@ -20,9 +20,6 @@ void send_esc_status(void);
 
 // Handle esc input in can_node when received
 void handle_ESC_RawCommand(CanardInstance *ins, CanardRxTransfer *transfer);
-
-// Set all outputs to zero
-void set_all_to_zero();
 
 
 // Last commanded values from PX4, range [-8192, 8191]
