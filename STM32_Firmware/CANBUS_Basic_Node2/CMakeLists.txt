@@ -54,6 +54,9 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Library/Canard/canard.c
     Library/can_node/Src/can_node.c
     Library/can_node/Src/can_esc.c
+    Library/can_node/Src/can_servo.c
+    Library/can_node/Src/can_battery.c
+    Library/can_node/Src/can_pitot.c
     ${DSDL_Src}
 )
 

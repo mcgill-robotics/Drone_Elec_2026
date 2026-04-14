@@ -1,14 +1,6 @@
 #include "can_node.h"
 #include <can_esc.h>
 
-
-// ============================================================
-//  ESC state
-// ============================================================
-
-int16_t esc_raw_cmd[ESC_COUNT] = {0, 0};
-
-
 // ============================================================
 //  ESC RawCommand handler
 //
@@ -27,11 +19,12 @@ void handle_ESC_RawCommand(CanardInstance *ins, CanardRxTransfer *transfer)
     for (uint8_t i = 0; i < ESC_COUNT; i++) {
         uint8_t ch = ESC_CHANNEL_OFFSET + i;
         if (ch < cmd.cmd.len) {
-            esc_raw_cmd[i] = cmd.cmd.data[ch];
+            esc[i].esc_cmd = cmd.cmd.data[ch];
         } else {
             // Channel not present in this packet — safe disarm
-            esc_raw_cmd[i] = 0;
+            esc[i].esc_cmd = 0;
         }
+        esc[i].last_update = millis32();
     }
 }
 
@@ -43,7 +36,7 @@ void handle_ESC_RawCommand(CanardInstance *ins, CanardRxTransfer *transfer)
 // ============================================================
 
 // Run once every 50ms
-void send_esc_status(void)
+int16_t send_esc_status(void)
 {
     static uint8_t transfer_id = 0;
 
@@ -59,7 +52,7 @@ void send_esc_status(void)
         status.temperature  = 0.0;
         status.rpm          = 0;
         // Map [-8192,8191] throttle to [0,100] power percent for telemetry
-        int32_t pct = ((int32_t)esc_raw_cmd[i] + 8192) * 100 / 16383;
+        int32_t pct = ((int32_t)esc[i].esc_cmd + 8192) * 100 / 16383;
         status.power_rating_pct = (uint8_t)pct;
         status.error_count  = 0;
 

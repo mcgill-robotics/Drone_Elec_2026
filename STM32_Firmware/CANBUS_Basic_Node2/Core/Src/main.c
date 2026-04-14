@@ -18,6 +18,8 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "can_battery.h"
+#include "can_pitot.h"
 #include "cmsis_os.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -116,30 +118,30 @@ void StartLedBlink(void *argument);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-// Convert can esc output to pwm
-uint16_t esc_raw_to_pwm(int16_t raw)
-{
-    // raw is [-8192 .. 8191], map to [ESC_PWM_MIN_US .. ESC_PWM_MAX_US]
-    // Clamp to [0, 8191] for unidirectional ESCs (most drone ESCs)
-    if (raw < 0) raw = -raw;
-    uint32_t pwm = ESC_PWM_MIN_US + ((uint32_t)raw * (ESC_PWM_MAX_US - ESC_PWM_MIN_US)) / 8191;
-    return (uint16_t)pwm;
-}
+//// Convert can esc output to pwm
+//uint16_t esc_raw_to_pwm(int16_t raw)
+//{
+    //// raw is [-8192 .. 8191], map to [ESC_PWM_MIN_US .. ESC_PWM_MAX_US]
+    //// Clamp to [0, 8191] for unidirectional ESCs (most drone ESCs)
+    //if (raw < 0) raw = -raw;
+    //uint32_t pwm = ESC_PWM_MIN_US + ((uint32_t)raw * (ESC_PWM_MAX_US - ESC_PWM_MIN_US)) / 8191;
+    //return (uint16_t)pwm;
+//}
 
-// Called whenever new ESC commands are received.
-void esc_set_output(uint8_t esc_index, int16_t raw_value)
-{
-    uint16_t ccr = esc_raw_to_pwm(raw_value) * 60714 / 2500;
+//// Called whenever new ESC commands are received.
+//void esc_set_output(uint8_t esc_index, int16_t raw_value)
+//{
+    //uint16_t ccr = esc_raw_to_pwm(raw_value) * 60714 / 2500;
 
-    if (esc_index == 0){
-        __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, ccr);
-    }
+    //if (esc_index == 0){
+        //__HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, ccr);
+    //}
 
-    if (esc_index == 1){
-        __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_2, ccr);
-    }
+    //if (esc_index == 1){
+        //__HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_2, ccr);
+    //}
 
-}
+//}
 
 /* USER CODE END 0 */
 
@@ -607,17 +609,23 @@ void StartEscStatus(void *argument)
     // Must be at start to avoid mutexacquire delay
     ticks += 100U;
     osDelayUntil(ticks);
-
-    // Call mutex
-    if (osMutexAcquire(CanardlibMutexHandle, osWaitForever) == osOK)
+    for (int i = 0; i < 3; i++)
     {
-      send_esc_status();   
+      // Call mutex
+      if (osMutexAcquire(CanardlibMutexHandle, osWaitForever) == osOK)
+      {
+        switch(i) {
+          case 0: send_esc_status(); break;
+          case 1: send_battery_info(25.8, 8.8); break; 
+          case 2: send_pitot_info(25, 5, 273.15); break;
+        }
+        osMutexRelease(CanardlibMutexHandle);
+      }
 
-      osMutexRelease(CanardlibMutexHandle);
+        // Start can tx task
+        xTaskNotifyGive(CanTxHandle); 
     }
-
-      // Start can tx task
-      xTaskNotifyGive(CanTxHandle); 
+    
     
   }
   /* USER CODE END StartEscStatus */

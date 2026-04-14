@@ -16,11 +16,16 @@
 #define ESC_COUNT           2
 
 // Send esc status regularly
-void send_esc_status(void);
+// Returns the number of bits encoded or negative error value
+// Check that it is greater than int16_t
+int16_t send_esc_status(void);
 
 // Handle esc input in can_node when received
 void handle_ESC_RawCommand(CanardInstance *ins, CanardRxTransfer *transfer);
 
 
-// Last commanded values from PX4, range [-8192, 8191]
-extern int16_t esc_raw_cmd[ESC_COUNT];
+// Motor input and last update time
+static struct {
+    int16_t esc_cmd;
+    int32_t last_update;
+} esc[ESC_COUNT];

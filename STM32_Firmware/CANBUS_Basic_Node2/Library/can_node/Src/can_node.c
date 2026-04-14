@@ -1,4 +1,5 @@
 #include "can_node.h"
+#include "uavcan.equipment.actuator.ArrayCommand.h"
 
 // ============================================================
 //  Libcanard
@@ -89,7 +90,7 @@ static uint64_t micros64(void)
     return (upper | (uint64_t)now) / (SystemCoreClock / 1000000ULL);
 }
 
-static uint32_t millis32(void) {
+uint32_t millis32(void) {
     return micros64() / 1000ULL;
 }
 
@@ -342,7 +343,12 @@ static void on_transfer_received(CanardInstance *ins, CanardRxTransfer *transfer
         #endif
         
         #ifdef USE_SERVO
-            prinf();
+            case UAVCAN_EQUIPMENT_ACTUATOR_ARRAYCOMMAND_ID: {
+                if (canardGetLocalNodeID(&canard) != CANARD_BROADCAST_NODE_ID) {
+                    handle_SERVO_RawCommand(ins, transfer);
+                }
+
+            }
         #endif
 
         default:
@@ -422,14 +428,14 @@ void can_node_1hz_tasks(void)
 // External libcanard broadcast function
 // ============================================================
 
-void can_node_broadcast(uint64_t data_type_signature,
+int16_t can_node_broadcast(uint64_t data_type_signature,
                         uint16_t data_type_id,
                         uint8_t *inout_transfer_id,
                         uint8_t priority,
                         const void *payload,
                         uint16_t payload_len)
 {
-    canardBroadcast(&canard,
+    return canardBroadcast(&canard,
                     data_type_signature,
                     data_type_id,
                     inout_transfer_id,

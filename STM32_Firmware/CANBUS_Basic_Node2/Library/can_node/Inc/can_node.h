@@ -13,7 +13,7 @@
 
 // Define functions for different functionality
 #define USE_ESC
-//#define USE_SERVO
+#define USE_SERVO
 
 // --- Init / poll ---
 void    can_node_init(FDCAN_HandleTypeDef *hfdcan);
@@ -25,7 +25,8 @@ uint8_t    can_node_dequeue_and_process(void);
 // Call from your 1 Hz task (under mutex).
 void    can_node_1hz_tasks(void);
 
-// Call from your DNA poller task (under mutex). Returns 1 once node ID assigned.
+// Call from your DNA poller task (under mutex). 
+// Returns 1 once node ID assigned, return 2 when transmission required.
 int8_t  can_node_poll_dna(void);
 
 // Call from your TX task (under mutex).
@@ -35,9 +36,13 @@ void    can_node_flush_tx(void);
 void can_node_rx_isr(FDCAN_HandleTypeDef *hfdcan);
 
 //canbus broadcast function to use libcanard externally
-void can_node_broadcast(uint64_t data_type_signature,
+int16_t can_node_broadcast(uint64_t data_type_signature,
                         uint16_t data_type_id,
                         uint8_t *inout_transfer_id,
                         uint8_t priority,
                         const void *payload,
                         uint16_t payload_len);
+
+
+// Timer access to view time since last servo/motor update
+uint32_t millis32(void);

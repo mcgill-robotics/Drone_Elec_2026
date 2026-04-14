@@ -33,9 +33,12 @@ extern "C" {
 /* USER CODE BEGIN Includes */
 #include "can_node.h"
 #include "can_esc.h"
+#include "can_servo.h"
+#include "can_battery.h"
+#include "can_pitot.h"
 
-#define ESC_PWM_MIN_US 1000
-#define ESC_PWM_MAX_US 2000
+//#define ESC_PWM_MIN_US 1000
+//#define ESC_PWM_MAX_US 2000
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/
