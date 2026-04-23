@@ -18,12 +18,13 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "cmsis_os.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "can_node.h"
-#include "battery_sensors.h"
-
+#include "cmsis_os2.h"
+#include "portmacro.h"
+#include "stm32g4xx_hal.h"
 
 /* USER CODE END Includes */
 
@@ -49,6 +50,53 @@ FDCAN_HandleTypeDef hfdcan1;
 
 SPI_HandleTypeDef hspi1;
 
+/* Definitions for LedBlink */
+osThreadId_t LedBlinkHandle;
+const osThreadAttr_t LedBlink_attributes = {
+  .name = "LedBlink",
+  .priority = (osPriority_t) osPriorityLow7,
+  .stack_size = 128 * 4
+};
+/* Definitions for CanRx */
+osThreadId_t CanRxHandle;
+const osThreadAttr_t CanRx_attributes = {
+  .name = "CanRx",
+  .priority = (osPriority_t) osPriorityHigh,
+  .stack_size = 512 * 4
+};
+/* Definitions for CanTx */
+osThreadId_t CanTxHandle;
+const osThreadAttr_t CanTx_attributes = {
+  .name = "CanTx",
+  .priority = (osPriority_t) osPriorityAboveNormal,
+  .stack_size = 256 * 4
+};
+/* Definitions for CanStatus */
+osThreadId_t CanStatusHandle;
+const osThreadAttr_t CanStatus_attributes = {
+  .name = "CanStatus",
+  .priority = (osPriority_t) osPriorityBelowNormal,
+  .stack_size = 256 * 4
+};
+/* Definitions for MeasurePower */
+osThreadId_t MeasurePowerHandle;
+const osThreadAttr_t MeasurePower_attributes = {
+  .name = "MeasurePower",
+  .priority = (osPriority_t) osPriorityNormal,
+  .stack_size = 256 * 4
+};
+/* Definitions for ErrorLED */
+osThreadId_t ErrorLEDHandle;
+const osThreadAttr_t ErrorLED_attributes = {
+  .name = "ErrorLED",
+  .priority = (osPriority_t) osPriorityLow7,
+  .stack_size = 128 * 4
+};
+/* Definitions for CanardlibMutex */
+osMutexId_t CanardlibMutexHandle;
+const osMutexAttr_t CanardlibMutex_attributes = {
+  .name = "CanardlibMutex"
+};
 /* USER CODE BEGIN PV */
 
 /* USER CODE END PV */
@@ -59,6 +107,13 @@ static void MX_GPIO_Init(void);
 static void MX_FDCAN1_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_SPI1_Init(void);
+void StartLedBlink(void *argument);
+void StartCanRx(void *argument);
+void StartCanTx(void *argument);
+void StartCanStatus(void *argument);
+void StartMeasurePower(void *argument);
+void StartErrorLED(void *argument);
+
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -102,17 +157,88 @@ int main(void)
   MX_SPI1_Init();
   /* USER CODE BEGIN 2 */
 
+  bool okay = battery_sensors_init();
+  HAL_Delay(1000);
+  while(1)
+  {
+    battery_sensors_update();
+    float voltage = battery_get_cell_voltage(0);
+    float current = battery_get_current(0);
+  }
+  
+
+  // Setup canbus interupt
+  HAL_FDCAN_ConfigInterruptLines(&hfdcan1, FDCAN_IT_GROUP_RX_FIFO0, FDCAN_INTERRUPT_LINE0);
+  HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);
+
+  // Initialize dronecan
+  can_node_init(&hfdcan1);
+
+  // Start Canbus
+  HAL_FDCAN_Start(&hfdcan1);
+
+
   /* USER CODE END 2 */
+
+  /* Init scheduler */
+  osKernelInitialize();
+  /* Create the mutex(es) */
+  /* creation of CanardlibMutex */
+  CanardlibMutexHandle = osMutexNew(&CanardlibMutex_attributes);
+
+  /* USER CODE BEGIN RTOS_MUTEX */
+  /* add mutexes, ... */
+  /* USER CODE END RTOS_MUTEX */
+
+  /* USER CODE BEGIN RTOS_SEMAPHORES */
+  /* add semaphores, ... */
+  /* USER CODE END RTOS_SEMAPHORES */
+
+  /* USER CODE BEGIN RTOS_TIMERS */
+  /* start timers, add new ones, ... */
+  /* USER CODE END RTOS_TIMERS */
+
+  /* USER CODE BEGIN RTOS_QUEUES */
+  /* add queues, ... */
+  /* USER CODE END RTOS_QUEUES */
+
+  /* Create the thread(s) */
+  /* creation of LedBlink */
+  LedBlinkHandle = osThreadNew(StartLedBlink, NULL, &LedBlink_attributes);
+
+  /* creation of CanRx */
+  CanRxHandle = osThreadNew(StartCanRx, NULL, &CanRx_attributes);
+
+  /* creation of CanTx */
+  CanTxHandle = osThreadNew(StartCanTx, NULL, &CanTx_attributes);
+
+  /* creation of CanStatus */
+  CanStatusHandle = osThreadNew(StartCanStatus, NULL, &CanStatus_attributes);
+
+  /* creation of MeasurePower */
+  MeasurePowerHandle = osThreadNew(StartMeasurePower, NULL, &MeasurePower_attributes);
+
+  /* creation of ErrorLED */
+  ErrorLEDHandle = osThreadNew(StartErrorLED, NULL, &ErrorLED_attributes);
+
+  /* USER CODE BEGIN RTOS_THREADS */
+  /* add threads, ... */
+  /* USER CODE END RTOS_THREADS */
+
+  /* USER CODE BEGIN RTOS_EVENTS */
+  /* add events, ... */
+  /* USER CODE END RTOS_EVENTS */
+
+  /* Start scheduler */
+  osKernelStart();
+
+  /* We should never get here as control is now taken by the scheduler */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
 
-  battery_sensors_init();
-  can_node_init(&hfdcan1);
   while (1)
   {
-    battery_sensors_update();
-    can_node_update();
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -136,10 +262,8 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI|RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
-  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
   RCC_OscInitStruct.PLL.PLLM = RCC_PLLM_DIV5;
@@ -165,7 +289,7 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
-  HAL_RCC_MCOConfig(RCC_MCO1, RCC_MCO1SOURCE_HSI, RCC_MCODIV_4);
+  HAL_RCC_MCOConfig(RCC_MCO1, RCC_MCO1SOURCE_HSE, RCC_MCODIV_8);
 }
 
 /**
@@ -298,11 +422,11 @@ static void MX_SPI1_Init(void)
   hspi1.Instance = SPI1;
   hspi1.Init.Mode = SPI_MODE_MASTER;
   hspi1.Init.Direction = SPI_DIRECTION_2LINES;
-  hspi1.Init.DataSize = SPI_DATASIZE_4BIT;
+  hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
   hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
-  hspi1.Init.CLKPhase = SPI_PHASE_2EDGE;
+  hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_8;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_32;
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
@@ -370,7 +494,240 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
+// Canbus hardware interupt
+void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t flags){
+  (void) flags;
+
+  // Run library function to clear can buffer to ring buffer
+  can_node_rx_isr(hfdcan);
+
+  // Notify rx task to run
+  BaseType_t woken = pdFALSE;
+  vTaskNotifyGiveFromISR(CanRxHandle, &woken);
+  portYIELD_FROM_ISR(woken);
+}
+
+// Now handle FreeRTOS functions (which get called by the FDCAN_interupt)
+
+
 /* USER CODE END 4 */
+
+/* USER CODE BEGIN Header_StartLedBlink */
+/**
+  * @brief  Function implementing the LedBlink thread.
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartLedBlink */
+void StartLedBlink(void *argument)
+{
+  /* USER CODE BEGIN 5 */
+  /* Infinite loop */
+  for(;;)
+  {
+    // Blink heartbeat led, using osDelay as precision not needed
+    HAL_GPIO_WritePin(GRN_LED_GPIO_Port, GRN_LED_Pin, GPIO_PIN_SET);
+    osDelay(200);
+    HAL_GPIO_WritePin(GRN_LED_GPIO_Port, GRN_LED_Pin, GPIO_PIN_RESET);
+    osDelay(800);
+  }
+  /* USER CODE END 5 */
+}
+
+/* USER CODE BEGIN Header_StartCanRx */
+/**
+* @brief Function implementing the CanRx thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartCanRx */
+void StartCanRx(void *argument)
+{
+  /* USER CODE BEGIN StartCanRx */
+  (void) argument;
+
+  // Variable for tracking if node id aquired
+  uint8_t can_id_status = 0;
+  // Make LED RED
+  HAL_GPIO_WritePin(RED_LED_GPIO_Port, RED_LED_Pin, GPIO_PIN_SET);
+  while(can_id_status != 1) {
+
+    // Thread safe delay, precision not required
+    osDelay(20); 
+
+    if(osMutexAcquire(CanardlibMutexHandle, osWaitForever) == osOK) 
+    {
+      // Process incoming messages 
+      while(can_node_dequeue_and_process()) {} 
+
+      // Try to get dynamic node, return 2 to send, 1 if recieved and 0 if not
+      can_id_status = can_node_poll_dna();
+    
+      if (can_id_status == 2)
+      {
+        xTaskNotifyGive(CanTxHandle);
+      }
+
+      osMutexRelease(CanardlibMutexHandle); 
+
+    }
+    
+  }
+  
+  // Turn off red led - Node aquired
+  HAL_GPIO_WritePin(RED_LED_GPIO_Port, RED_LED_Pin, GPIO_PIN_RESET);
+
+
+  /* Infinite loop */
+  for(;;)
+  {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+    if (osMutexAcquire(CanardlibMutexHandle, osWaitForever) == osOK)
+    {
+      // Process canbus rx frames
+      while(can_node_dequeue_and_process()) {}
+      osMutexRelease(CanardlibMutexHandle);
+    }
+
+      // Start can tx task
+      xTaskNotifyGive(CanTxHandle);
+  }
+  /* USER CODE END StartCanRx */
+}
+
+/* USER CODE BEGIN Header_StartCanTx */
+/**
+* @brief Function implementing the CanTx thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartCanTx */
+void StartCanTx(void *argument)
+{
+  /* USER CODE BEGIN StartCanTx */
+  /* Infinite loop */
+  for(;;)
+  {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    if(osMutexAcquire(CanardlibMutexHandle, osWaitForever) == osOK)
+    {
+      can_node_flush_tx();
+      osMutexRelease(CanardlibMutexHandle);
+    }
+  }
+  /* USER CODE END StartCanTx */
+}
+
+/* USER CODE BEGIN Header_StartCanStatus */
+/**
+* @brief Function implementing the CanStatus thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartCanStatus */
+void StartCanStatus(void *argument)
+{
+  /* USER CODE BEGIN StartCanStatus */
+  (void) argument;
+  uint32_t ticks = osKernelGetTickCount();
+  /* Infinite loop */
+  for(;;)
+  {
+    // Delay must be at start
+    ticks += 1000U;
+    osDelayUntil(ticks);
+
+    // Call mutex
+    if (osMutexAcquire(CanardlibMutexHandle, osWaitForever) == osOK)
+    {
+      can_node_1hz_tasks();
+
+      osMutexRelease(CanardlibMutexHandle);
+    }
+
+      // Start can tx task
+      xTaskNotifyGive(CanTxHandle); 
+ 
+  }
+  /* USER CODE END StartCanStatus */
+}
+
+/* USER CODE BEGIN Header_StartMeasurePower */
+/**
+* @brief Function implementing the MeasurePower thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartMeasurePower */
+void StartMeasurePower(void *argument)
+{
+  /* USER CODE BEGIN StartMeasurePower */
+  (void) argument;
+  uint32_t ticks = osKernelGetTickCount();
+  /* Infinite loop */
+  for(;;)
+  {
+    // Must be at start to avoid mutexacquire delay
+    ticks += 100U;
+    osDelayUntil(ticks);
+    // Call mutex
+    if (osMutexAcquire(CanardlibMutexHandle, osWaitForever) == osOK)
+    {
+
+      send_battery_info(25.8, 8.8);
+      
+      osMutexRelease(CanardlibMutexHandle);
+    }
+
+      // Start can tx task
+      xTaskNotifyGive(CanTxHandle);  
+    
+  }
+  /* USER CODE END StartMeasurePower */
+}
+
+/* USER CODE BEGIN Header_StartErrorLED */
+/**
+* @brief Function implementing the ErrorLED thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartErrorLED */
+void StartErrorLED(void *argument)
+{
+  /* USER CODE BEGIN StartErrorLED */
+  /* Infinite loop */
+  for(;;)
+  {
+    // Implement later
+
+    osDelay(1);
+  }
+  /* USER CODE END StartErrorLED */
+}
+
+/**
+  * @brief  Period elapsed callback in non blocking mode
+  * @note   This function is called  when TIM7 interrupt took place, inside
+  * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
+  * a global variable "uwTick" used as application time base.
+  * @param  htim : TIM handle
+  * @retval None
+  */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+  /* USER CODE BEGIN Callback 0 */
+
+  /* USER CODE END Callback 0 */
+  if (htim->Instance == TIM7)
+  {
+    HAL_IncTick();
+  }
+  /* USER CODE BEGIN Callback 1 */
+
+  /* USER CODE END Callback 1 */
+}
 
 /**
   * @brief  This function is executed in case of error occurrence.

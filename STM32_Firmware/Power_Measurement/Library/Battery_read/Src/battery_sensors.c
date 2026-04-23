@@ -1,5 +1,5 @@
 #include "battery_sensors.h"
-#include "ads131m03.h"
+#include "amc130m03.h"
 #include "stm32g4xx_hal.h"
 #include <string.h>
 
@@ -72,7 +72,7 @@ extern ADC_HandleTypeDef hadc1;
 
 // ---- State --------------------------------------------------
 
-static ADS131M03_t  adc1, adc2;
+static AMC130M03_t  adc1, adc2;
 static float        cell_voltage_v[6];   // v[0..5], raw from ADS131M03
 static float        current_a[3];        // filtered current per pack
 
@@ -122,17 +122,17 @@ static void read_current_sensors(void)
 static void read_voltage_sensors(void)
 {
     // Device 1: CH0=cell0, CH1=cell1, CH2=cell2
-    if (ads131m03_read(&adc1, ADS_DRDY1_PORT, ADS_DRDY1_PIN)) {
-        cell_voltage_v[0] = ads131m03_get_voltage(&adc1, 0);
-        cell_voltage_v[1] = ads131m03_get_voltage(&adc1, 1);
-        cell_voltage_v[2] = ads131m03_get_voltage(&adc1, 2);
+    if (amc130m03_read(&adc1, ADS_DRDY1_PORT, ADS_DRDY1_PIN)) {
+        cell_voltage_v[0] = amc130m03_get_mv(&adc1, 0);
+        cell_voltage_v[1] = amc130m03_get_mv(&adc1, 1);
+        cell_voltage_v[2] = amc130m03_get_mv(&adc1, 2);
     }
 
     // Device 2: CH0=cell3, CH1=cell4, CH2=cell5
-    if (ads131m03_read(&adc2, ADS_DRDY2_PORT, ADS_DRDY2_PIN)) {
-        cell_voltage_v[3] = ads131m03_get_voltage(&adc2, 0);
-        cell_voltage_v[4] = ads131m03_get_voltage(&adc2, 1);
-        cell_voltage_v[5] = ads131m03_get_voltage(&adc2, 2);
+    if (amc130m03_read(&adc2, ADS_DRDY2_PORT, ADS_DRDY2_PIN)) {
+        cell_voltage_v[3] = amc130m03_get_mv(&adc2, 0);
+        cell_voltage_v[4] = amc130m03_get_mv(&adc2, 1);
+        cell_voltage_v[5] = amc130m03_get_mv(&adc2, 2);
     }
 }
 
@@ -145,8 +145,8 @@ bool battery_sensors_init(void)
     memset(cell_voltage_v, 0, sizeof(cell_voltage_v));
     memset(current_a,      0, sizeof(current_a));
 
-    bool ok1 = ads131m03_init(&adc1, &hspi1, ADS_CS1_PORT, ADS_CS1_PIN);
-    bool ok2 = ads131m03_init(&adc2, &hspi1, ADS_CS2_PORT, ADS_CS2_PIN);
+    bool ok1 = amc130m03_init(&adc1, &hspi1, ADS_CS1_PORT, ADS_CS1_PIN);
+    bool ok2 = amc130m03_init(&adc2, &hspi1, ADS_CS2_PORT, ADS_CS2_PIN);
 
     sensors_ready = ok1 && ok2;
     return sensors_ready;
