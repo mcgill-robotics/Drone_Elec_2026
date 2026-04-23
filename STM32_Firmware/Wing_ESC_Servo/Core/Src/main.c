@@ -19,6 +19,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "cmsis_os.h"
+#include "stm32g4xx_hal_tim.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -27,7 +28,34 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+uint32_t servo_error = 0;
+uint32_t esc_error = 0;
 
+// Sets which PWM channel drives which servo
+uint32_t servo_channel(int i){
+  switch (i){
+    case 0:
+      return TIM_CHANNEL_1;
+      break;
+    default:
+      esc_error |= (1u << 30);
+      return TIM_CHANNEL_1;
+  }
+}
+// Sets which PWM channel drives which esc
+uint32_t esc_channel(int i){
+  switch (i){
+    case 0:
+      return TIM_CHANNEL_1;
+      break;
+    case 1:
+      return TIM_CHANNEL_2;
+      break;
+    default:
+      esc_error |= (1u << 30);
+      return TIM_CHANNEL_1;
+  }
+}
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -78,7 +106,7 @@ const osThreadAttr_t EscStatus_attributes = {
 osThreadId_t LedBlinkHandle;
 const osThreadAttr_t LedBlink_attributes = {
   .name = "LedBlink",
-  .priority = (osPriority_t) osPriorityLow7,
+  .priority = (osPriority_t) osPriorityLow6,
   .stack_size = 128 * 4
 };
 /* Definitions for EscUpdate */
@@ -94,6 +122,13 @@ const osThreadAttr_t ServoUpdate_attributes = {
   .name = "ServoUpdate",
   .priority = (osPriority_t) osPriorityAboveNormal4,
   .stack_size = 256 * 4
+};
+/* Definitions for ErrorLED */
+osThreadId_t ErrorLEDHandle;
+const osThreadAttr_t ErrorLED_attributes = {
+  .name = "ErrorLED",
+  .priority = (osPriority_t) osPriorityLow7,
+  .stack_size = 128 * 4
 };
 /* Definitions for CanardlibMutex */
 osMutexId_t CanardlibMutexHandle;
@@ -117,6 +152,7 @@ void StartEscStatus(void *argument);
 void StartLedBlink(void *argument);
 void StartEscUpdate(void *argument);
 void StartServoUpdate(void *argument);
+void StartErrorLED(void *argument);
 
 /* USER CODE BEGIN PFP */
 
@@ -160,6 +196,16 @@ int main(void)
   MX_TIM4_Init();
   MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
+
+  // Setup canbus interupt
+  HAL_FDCAN_ConfigInterruptLines(&hfdcan1, FDCAN_IT_GROUP_RX_FIFO0, FDCAN_INTERRUPT_LINE0);
+  HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);
+
+  // Initialize dronecan
+  can_node_init(&hfdcan1);
+
+  // Start Canbus
+  HAL_FDCAN_Start(&hfdcan1);
 
   /* USER CODE END 2 */
 
@@ -206,6 +252,9 @@ int main(void)
 
   /* creation of ServoUpdate */
   ServoUpdateHandle = osThreadNew(StartServoUpdate, NULL, &ServoUpdate_attributes);
+
+  /* creation of ErrorLED */
+  ErrorLEDHandle = osThreadNew(StartErrorLED, NULL, &ErrorLED_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -338,7 +387,7 @@ static void MX_TIM3_Init(void)
 
   /* USER CODE END TIM3_Init 1 */
   htim3.Instance = TIM3;
-  htim3.Init.Prescaler = 0;
+  htim3.Init.Prescaler = 51;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim3.Init.Period = 65383;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -454,6 +503,23 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+// Map function for canbus servo/esc command to PWM pulse
+static inline int32_t map_int(int32_t x, int32_t in_min, int32_t in_max, int32_t out_min, int32_t out_max) {
+    return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
+
+// Canbus interupt
+void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t flags){
+  (void) flags;
+
+  // Run library function to clear can buffer to ring buffer
+  can_node_rx_isr(hfdcan);
+
+  // Notify rx task to run
+  BaseType_t woken = pdFALSE;
+  vTaskNotifyGiveFromISR(CanRxHandle, &woken);
+  portYIELD_FROM_ISR(woken);
+}
 
 /* USER CODE END 4 */
 
@@ -467,10 +533,25 @@ static void MX_GPIO_Init(void)
 void StartCanStatus(void *argument)
 {
   /* USER CODE BEGIN 5 */
-  /* Infinite loop */
+  (void) argument;
+  uint32_t ticks = osKernelGetTickCount();
+  
   for(;;)
-  {
-    osDelay(1);
+  { 
+    // Wait 1 second
+    ticks += 1000U;
+    osDelayUntil(ticks);
+
+    // Aquire canbus mutex
+    if (osMutexAcquire(CanardlibMutexHandle, osWaitForever) == osOK)
+    {
+      // Send update
+      can_node_1hz_tasks();
+
+      osMutexRelease(CanardlibMutexHandle);
+    }
+      // Notify canbus transmit task to send data
+      xTaskNotifyGive(CanTxHandle);  
   }
   /* USER CODE END 5 */
 }
@@ -485,10 +566,59 @@ void StartCanStatus(void *argument)
 void StartCanRx(void *argument)
 {
   /* USER CODE BEGIN StartCanRx */
+  (void) argument;
+
+  // Getting node allocated
+  uint8_t can_id_status = 0;
+
+  // Turn red led on to indicate wait in progress
+  HAL_GPIO_WritePin(RED_LED_GPIO_Port, RED_LED_Pin, GPIO_PIN_SET);
+
+  // Wait untill node allocated
+  while(can_id_status != 1) {
+
+    // Thread safe delay, precision not required
+    osDelay(20); 
+
+    // Get canbus mutex
+    if(osMutexAcquire(CanardlibMutexHandle, osWaitForever) == osOK) 
+    {
+      // Process incoming messages 
+      while(can_node_dequeue_and_process()) {} 
+
+      // Try to get dynamic node, returns 2 to signal data transmission required, 1 if recieved and 0 if else
+      can_id_status = can_node_poll_dna();
+      
+      // Transmit data if required
+      if (can_id_status == 2)
+      {
+        xTaskNotifyGive(CanTxHandle);
+      }
+
+      osMutexRelease(CanardlibMutexHandle); 
+    } 
+  }
+  
+  // Turn off red led - Node aquired
+  HAL_GPIO_WritePin(RED_LED_GPIO_Port, RED_LED_Pin, GPIO_PIN_RESET);
+
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
+
+    // Wait forever untill triggered by canbus interupt
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+    // Aquire mutex
+    if (osMutexAcquire(CanardlibMutexHandle, osWaitForever) == osOK)
+    {
+      // Process canbus rx frames
+      while(can_node_dequeue_and_process()) {}
+      osMutexRelease(CanardlibMutexHandle);
+    }
+      // Notify canbus tx task to send data 
+      // Done as processing data can require responding
+      xTaskNotifyGive(CanTxHandle);
   }
   /* USER CODE END StartCanRx */
 }
@@ -503,10 +633,18 @@ void StartCanRx(void *argument)
 void StartCanTx(void *argument)
 {
   /* USER CODE BEGIN StartCanTx */
-  /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
+    // Wait forever untill function is called
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+    // Aquire canbus mutex
+    if(osMutexAcquire(CanardlibMutexHandle, osWaitForever) == osOK)
+    {
+      // Call drone can send data function
+      can_node_flush_tx();
+      osMutexRelease(CanardlibMutexHandle);
+    }
   }
   /* USER CODE END StartCanTx */
 }
@@ -521,10 +659,22 @@ void StartCanTx(void *argument)
 void StartEscStatus(void *argument)
 {
   /* USER CODE BEGIN StartEscStatus */
+  (void) argument;
+  uint32_t ticks = osKernelGetTickCount();
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
+    // Send status at 10hz
+    ticks += 100U;
+    osDelayUntil(ticks);
+
+    // Aquire mutex
+    if (osMutexAcquire(CanardlibMutexHandle, osWaitForever) == osOK){
+      // Send status
+      send_esc_status();
+      osMutexRelease(CanardlibMutexHandle);
+    }
+    xTaskNotifyGive(CanTxHandle);
   }
   /* USER CODE END StartEscStatus */
 }
@@ -539,10 +689,14 @@ void StartEscStatus(void *argument)
 void StartLedBlink(void *argument)
 {
   /* USER CODE BEGIN StartLedBlink */
+  (void) argument;
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
+    HAL_GPIO_WritePin(GRN_LED_GPIO_Port, GRN_LED_Pin, GPIO_PIN_SET);
+    osDelay(100);
+    HAL_GPIO_WritePin(GRN_LED_GPIO_Port, GRN_LED_Pin, GPIO_PIN_RESET);
+    osDelay(900);
   }
   /* USER CODE END StartLedBlink */
 }
@@ -557,10 +711,36 @@ void StartLedBlink(void *argument)
 void StartEscUpdate(void *argument)
 {
   /* USER CODE BEGIN StartEscUpdate */
+  (void) argument;
+  uint32_t ticks = osKernelGetTickCount();
+  update_tracking esc_status[ESC_COUNT] = {0};
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
+    // Update at 200hz
+    ticks += 5;
+    osDelayUntil(ticks);
+    for(int i = 0; i < ESC_COUNT; i++){
+      if (esc[i].last_update !=esc_status[i].last_update){
+        esc_status[i].last_update = esc[i].last_update;
+        esc_status[i].update_failed_count = 0;
+        esc_status[i].update_without_fault ++;
+        if (esc_status[i].update_without_fault > 200) esc_error &= ~(1u << i);
+        uint32_t pulse = map_int(esc[i].esc_cmd, ESC_CAN_MIN, ESC_CAN_MAX, ESC_PULSE_MIN, ESC_PULSE_MAX);
+
+        __HAL_TIM_SET_COMPARE(&htim4, esc_channel(i) , pulse);
+        // Write esc command
+      }
+      else {
+        esc_status[i].update_failed_count ++;
+        esc_status[i].update_without_fault = 0;
+        if (esc_status[i].update_failed_count >= ALLOWED_ESC_FAILS) {
+          esc_error |= (1u << i);
+          __HAL_TIM_SET_COMPARE(&htim4, esc_channel(i) , 0);
+        }
+      }
+    }
+  
   }
   /* USER CODE END StartEscUpdate */
 }
@@ -575,12 +755,62 @@ void StartEscUpdate(void *argument)
 void StartServoUpdate(void *argument)
 {
   /* USER CODE BEGIN StartServoUpdate */
+  (void) argument;
+  uint32_t ticks = osKernelGetTickCount();
+  update_tracking servo_status[SERVO_COUNT] = {0};
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
+    // Update at 50hz
+    ticks += 20;
+    osDelayUntil(ticks);
+    for(int i = 0; i < SERVO_COUNT; i++){
+      if (servos[i].last_update != servo_status[i].last_update){
+        servo_status[i].last_update = servos[i].last_update;
+        servo_status[i].update_failed_count = 0;
+        servo_status[i].update_without_fault ++;
+        if (servo_status[i].update_without_fault > 50) servo_error &= ~(1u << i);
+        uint32_t pulse = map_int(servos[i].servo_cmd, SERVO_CAN_MIN, SERVO_CAN_MAX, SERVO_PULSE_MIN, SERVO_PULSE_MAX);
+        __HAL_TIM_SET_COMPARE(&htim3, servo_channel(i) , pulse);
+      }
+      else {
+        servo_status[i].update_failed_count ++;
+        servo_status[i].update_without_fault = 0;
+        if (servo_status[i].update_failed_count >= ALLOWED_SERVO_FAILS) {
+          servo_error |= (1u << i);
+          __HAL_TIM_SET_COMPARE(&htim3, servo_channel(i) , 0);
+        }
+      }
+    }
+    
+
   }
   /* USER CODE END StartServoUpdate */
+}
+
+/* USER CODE BEGIN Header_StartErrorLED */
+/**
+* @brief Function implementing the ErrorLED thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartErrorLED */
+void StartErrorLED(void *argument)
+{
+  /* USER CODE BEGIN StartErrorLED */
+  /* Infinite loop */
+  for(;;)
+  {
+    osDelay(500);
+
+    if (esc_error != 0 || servo_error != 0){
+      HAL_GPIO_WritePin(RED_LED_GPIO_Port, RED_LED_Pin, GPIO_PIN_SET);
+    }
+    else {
+      HAL_GPIO_WritePin(RED_LED_GPIO_Port, RED_LED_Pin, GPIO_PIN_RESET);
+    }
+  }
+  /* USER CODE END StartErrorLED */
 }
 
 /**

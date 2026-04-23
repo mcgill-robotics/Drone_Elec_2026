@@ -14,8 +14,9 @@ void send_esc_status(void);
 void handle_ESC_RawCommand(CanardInstance *ins, CanardRxTransfer *transfer);
 
 
-// Motor input and last update time
-static struct {
+// esc_cmd carries motor command from -8192 to 8191
+// last_update is incremented each time a new command is recieved
+volatile static struct {
     int16_t esc_cmd;
-    int32_t last_update;
+    uint32_t last_update;
 } esc[ESC_COUNT];

@@ -8,7 +8,10 @@
 
 void handle_SERVO_RawCommand(CanardInstance *ins, CanardRxTransfer *transfer);
 
-static struct {
-    int16_t servo_cmd;
-    int32_t last_update;
-} servos[SERVO_COUNT];
+
+// Servo_cmd carries the servo output value in range 1000 to 2000
+// last_update is incremented each time the value is updated
+volatile static struct {
+    uint16_t servo_cmd;
+    uint32_t last_update;
+} servos[SERVO_COUNT] = {0};

@@ -29,15 +29,41 @@ extern "C" {
 /* Includes ------------------------------------------------------------------*/
 #include "stm32g4xx_hal.h"
 
-#include <drone_can.h>
-
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include <drone_can.h>
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/
 /* USER CODE BEGIN ET */
+
+// Alowed number of PWM write function without recieving pwm command
+// till it enters a zero state
+#define ALLOWED_SERVO_FAILS 5
+#define ALLOWED_ESC_FAILS 5
+
+// Servo output pulse max and min for pwm timer map function
+#define SERVO_PULSE_MAX 48570
+#define SERVO_PULSE_MIN 24285
+
+// Servo input from canbus min and max for map function
+#define SERVO_CAN_MAX 2000
+#define SERVO_CAN_MIN 1000
+
+// ESC output pulse max and min for pwm timer map function
+#define ESC_PULSE_MAX 6538
+#define ESC_PULSE_MIN 3269
+
+// ESC input from canbus min and max for map function
+#define ESC_CAN_MAX 8191
+#define ESC_CAN_MIN -8192
+
+// Struct for tracking if esc/servo has updated recently
+typedef struct{
+  int32_t update_failed_count;
+  uint32_t last_update;
+  int32_t update_without_fault;
+} update_tracking;
 
 /* USER CODE END ET */
 

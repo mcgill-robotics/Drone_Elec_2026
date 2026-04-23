@@ -201,7 +201,7 @@ static void handle_GetNodeInfo(CanardInstance *ins, CanardRxTransfer *transfer)
     get_unique_id(pkt.hardware_version.unique_id);
 
     // Assign name if desired 
-    char name[50];
+    char name[50] = "McGill Robotics";
     strncpy((char *)pkt.name.data, name, sizeof(pkt.name.data));
     pkt.name.len = strlen(name);
 
