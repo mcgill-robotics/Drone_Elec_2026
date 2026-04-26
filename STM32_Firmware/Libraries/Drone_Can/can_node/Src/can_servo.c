@@ -1,10 +1,10 @@
-#include "can_node.h"
-#include <can_servo.h>
-
+#include "can_servo.h"
 
 // ============================================================
 //  SERVO RawCommand handler
 // ============================================================
+
+volatile servo_state servos[SERVO_COUNT] = {0};
 
 void handle_SERVO_RawCommand(CanardInstance *ins, CanardRxTransfer *transfer)
 {

@@ -6,7 +6,7 @@
 #include <stdbool.h>
 
 // Include configuration library
-// Must be written in each function which implements it
+// Must be written in each function which implements the library
 // See readme for example
 #include <can_config.h>
 

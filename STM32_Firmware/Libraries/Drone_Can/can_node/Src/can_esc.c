@@ -1,5 +1,4 @@
-#include "can_node.h"
-#include <can_esc.h>
+#include "can_esc.h"
 
 // ============================================================
 //  ESC RawCommand handler
@@ -8,6 +7,8 @@
 //  containing up to 20 throttle values in [-8192, 8191].
 //  We extract the two channels assigned to this device.
 // ============================================================
+
+volatile EscState esc[ESC_COUNT] = {0};
 
 void handle_ESC_RawCommand(CanardInstance *ins, CanardRxTransfer *transfer)
 {
@@ -20,11 +21,11 @@ void handle_ESC_RawCommand(CanardInstance *ins, CanardRxTransfer *transfer)
         uint8_t ch = ESC_CHANNEL_OFFSET + i;
         if (ch < cmd.cmd.len) {
             esc[i].esc_cmd = cmd.cmd.data[ch];
+            esc[i].last_update ++;
         } else {
             // Channel not present in this packet — safe disarm
             esc[i].esc_cmd = 0;
         }
-        esc[i].last_update = millis32();
     }
 }
 

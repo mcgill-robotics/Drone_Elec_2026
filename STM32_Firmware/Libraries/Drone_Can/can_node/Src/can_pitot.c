@@ -1,5 +1,4 @@
 #include "can_pitot.h"
-#include "uavcan.equipment.air_data.RawAirData.h"
 
 
 int16_t send_pitot_info(uint16_t differential_pressure, uint16_t static_pressure, uint16_t temperature)

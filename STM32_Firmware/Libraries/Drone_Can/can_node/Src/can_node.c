@@ -1,5 +1,4 @@
 #include "can_node.h"
-#include "uavcan.equipment.actuator.ArrayCommand.h"
 
 // ============================================================
 //  Libcanard
@@ -389,7 +388,7 @@ static bool should_accept_transfer(const CanardInstance *ins,
 
         #ifdef USE_SERVO
         case UAVCAN_EQUIPMENT_ACTUATOR_ARRAYCOMMAND_ID:
-            *out_data_type_signature = UAVCAN_EQUIPMENT_ESC_RAWCOMMAND_SIGNATURE;
+            *out_data_type_signature = UAVCAN_EQUIPMENT_ACTUATOR_ARRAYCOMMAND_SIGNATURE;
             return 1;
         #endif
 

@@ -9,19 +9,12 @@
 // This library includes the 
 #include <can_node.h>
 
+// Include other canbus libraries
+// Will be compiler optimized out if not used
+#include <can_pitot.h>
 
-#ifdef USE_PITOT
-    #include <can_pitot.h>
-#endif
+#include <can_battery.h>
 
-#ifdef USE_BATTERY
-    #include <can_battery.h>
-#endif
+#include <can_esc.h>
 
-#ifdef USE_ESC
-    #include <can_esc.h>
-#endif
-
-#ifdef USE_SERVO
-    #include <can_servo.h>
-#endif
+#include <can_servo.h>

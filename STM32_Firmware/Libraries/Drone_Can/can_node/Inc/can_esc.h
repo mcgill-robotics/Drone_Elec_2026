@@ -2,7 +2,7 @@
 
 
 // Private file include
-#include <can_node.h>
+#include "can_node.h"
 
 
 // Send esc status regularly
@@ -16,7 +16,9 @@ void handle_ESC_RawCommand(CanardInstance *ins, CanardRxTransfer *transfer);
 
 // esc_cmd carries motor command from -8192 to 8191
 // last_update is incremented each time a new command is recieved
-volatile static struct {
-    int16_t esc_cmd;
+typedef struct {
+    int16_t  esc_cmd;
     uint32_t last_update;
-} esc[ESC_COUNT];
+} EscState;
+
+extern volatile EscState esc[ESC_COUNT];

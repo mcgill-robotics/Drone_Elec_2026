@@ -1,8 +1,7 @@
 #include "can_battery.h"
-#include "uavcan.equipment.power.BatteryInfo.h"
-#include <complex.h>
 
-int16_t send_battery_info(uint16_t voltage, uint16_t current)
+
+int16_t send_battery_info(float voltage, float current)
 {
     static uint8_t transfer_id = 0;
 
