@@ -138,48 +138,43 @@ void StartErrorLED(void *argument);
 /* USER CODE BEGIN 0 */
 
 // Sets which PWM channel drives which servo
-uint32_t servo_channel(int i){
-  switch (i){
+
+void write_servo(int8_t i, uint16_t crr){
+  switch(i){
     case 0:
-      return TIM_CHANNEL_1;
+      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1 , crr);
+      servo_error &= ~(1u << 30);
       break;
     case 1:
-      return TIM_CHANNEL_2;
+      __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2 , crr);
+      servo_error &= ~(1u << 30);
+      break;
+    case 2:
+      __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1 , crr);
+      servo_error &= ~(1u << 30);
       break;
     default:
-      esc_error |= (1u << 30);
-      return TIM_CHANNEL_1;
+      servo_error |= (1u << 30);
+      break;
   }
 }
-TIM_HandleTypeDef* servo_timer(int i){
+      
+
+void write_esc(uint8_t i, uint16_t crr){
   switch (i){
     case 0:
-      return &htim3;
+      __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1 , crr);
+      esc_error &= ~(1u << 29);
       break;
     case 1:
-      return &htim2;
+      __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_2 , crr);
+      esc_error &= ~(1u << 29);
       break;
     default:
       esc_error |= (1u << 29);
-      return &htim2;
-
+      break;
   }
 }
-// Sets which PWM channel drives which esc
-uint32_t esc_channel(int i){
-  switch (i){
-    case 0:
-      return TIM_CHANNEL_1;
-      break;
-    case 1:
-      return TIM_CHANNEL_2;
-      break;
-    default:
-      esc_error |= (1u << 28);
-      return TIM_CHANNEL_1;
-  }
-}
-
 
 /* USER CODE END 0 */
 
@@ -191,7 +186,6 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -218,6 +212,7 @@ int main(void)
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
 
+
   // Setup canbus interupt
   HAL_FDCAN_ConfigInterruptLines(&hfdcan1, FDCAN_IT_GROUP_RX_FIFO0, FDCAN_INTERRUPT_LINE0);
   HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);
@@ -230,6 +225,7 @@ int main(void)
 
   // Start PWM channels
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
+  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
   HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_1);
   HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_2);
@@ -435,6 +431,10 @@ static void MX_TIM2_Init(void)
   sConfigOC.Pulse = 0;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
   if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
   {
     Error_Handler();
@@ -586,6 +586,11 @@ static inline int32_t map_int(int32_t x, int32_t in_min, int32_t in_max, int32_t
   return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
+uint32_t introduce_jitter(uint32_t range_ms){
+  int32_t uid = HAL_GetUIDw0() ^ HAL_GetUIDw1() ^ HAL_GetUIDw2();
+  return uid % range_ms;
+}
+
 // Canbus interupt
 void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t flags){
   (void) flags;
@@ -612,6 +617,7 @@ void StartCanStatus(void *argument)
 {
   /* USER CODE BEGIN 5 */
   (void) argument;
+  osDelay(introduce_jitter(1000));
   uint32_t ticks = osKernelGetTickCount();
   
   for(;;)
@@ -738,6 +744,7 @@ void StartEscStatus(void *argument)
 {
   /* USER CODE BEGIN StartEscStatus */
   (void) argument;
+  osDelay(introduce_jitter(1000));
   uint32_t ticks = osKernelGetTickCount();
   /* Infinite loop */
   for(;;)
@@ -768,6 +775,7 @@ void StartLedBlink(void *argument)
 {
   /* USER CODE BEGIN StartLedBlink */
   (void) argument;
+  osDelay(introduce_jitter(1000));
   /* Infinite loop */
   for(;;)
   {
@@ -790,6 +798,7 @@ void StartEscUpdate(void *argument)
 {
   /* USER CODE BEGIN StartEscUpdate */
   (void) argument;
+  osDelay(introduce_jitter(1000));
   uint32_t ticks = osKernelGetTickCount();
   update_tracking esc_status[ESC_COUNT] = {0};
   /* Infinite loop */
@@ -805,8 +814,7 @@ void StartEscUpdate(void *argument)
         if (esc_status[i].update_without_fault > 200) esc_error &= ~(1u << i);
         if (esc[i].esc_cmd < 0) esc[i].esc_cmd = -esc[i].esc_cmd;
         uint32_t pulse = map_int(esc[i].esc_cmd, ESC_CAN_MIN, ESC_CAN_MAX, ESC_PULSE_MIN, ESC_PULSE_MAX);
-
-        __HAL_TIM_SET_COMPARE(&htim4, esc_channel(i) , pulse);
+        write_esc(i, pulse);
         // Write esc command
       }
       else {
@@ -814,7 +822,7 @@ void StartEscUpdate(void *argument)
         esc_status[i].update_without_fault = 0;
         if (esc_status[i].update_failed_count >= ALLOWED_ESC_FAILS) {
           esc_error |= (1u << i);
-          __HAL_TIM_SET_COMPARE(&htim4, esc_channel(i) , ESC_PULSE_MIN);
+          write_esc(i, ESC_PULSE_MIN);
         }
       }
       esc_status[i].last_update = esc[i].last_update;
@@ -835,6 +843,7 @@ void StartServoUpdate(void *argument)
 {
   /* USER CODE BEGIN StartServoUpdate */
   (void) argument;
+  osDelay(introduce_jitter(1000));
   uint32_t ticks = osKernelGetTickCount();
   update_tracking servo_status[SERVO_COUNT] = {0};
   /* Infinite loop */
@@ -850,14 +859,14 @@ void StartServoUpdate(void *argument)
         if (servo_status[i].update_without_fault > 50) servo_error &= ~(1u << i);
         if (servos[i].servo_cmd < 0) servos[i].servo_cmd = -servos[i].servo_cmd;
         uint32_t pulse = map_int(servos[i].servo_cmd, SERVO_CAN_MIN, SERVO_CAN_MAX, SERVO_PULSE_MIN, SERVO_PULSE_MAX);
-        __HAL_TIM_SET_COMPARE(servo_timer(i), servo_channel(i) , pulse);
+        write_servo(i, pulse);
       }
       else {
         servo_status[i].update_failed_count ++;
         servo_status[i].update_without_fault = 0;
         if (servo_status[i].update_failed_count >= ALLOWED_SERVO_FAILS) {
           servo_error |= (1u << i);
-          __HAL_TIM_SET_COMPARE(&htim3, servo_channel(i) , 0);
+          write_servo(i, 0);
         }
       }
       servo_status[i].last_update = servos[i].last_update;

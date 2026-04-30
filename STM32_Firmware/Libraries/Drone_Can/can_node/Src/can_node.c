@@ -466,8 +466,4 @@ void can_node_init(FDCAN_HandleTypeDef *hfdcan)
     canardSetLocalNodeID(&canard, MY_NODE_ID);
 #endif
 
-    // Moved outside library
-    // HAL_FDCAN_ActivateNotification(_hfdcan,
-    //     FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);
-    // HAL_FDCAN_Start(_hfdcan);
 }

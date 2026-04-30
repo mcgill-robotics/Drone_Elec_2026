@@ -638,7 +638,7 @@ float inverse_voltage_divider(float voltage){
 
 // Calculate current from adc
 float calculate_current(float adc_read){
-  return adc_read * (current_sense_max - current_sense_min) / adc_max + current_sense_min;
+  return adc_read * (current_sense_max - current_sense_min) / adc_max;
 }
 
 // DRDY interupt handler for voltage sensor
@@ -833,19 +833,20 @@ void StartMeasurePower(void *argument)
   get_average voltage = {0};
   get_average current = {0};
   uint8_t cycle_count = 0;
+  uint16_t current_snap[3] = {0};
 
   /* Infinite loop */
   for(;;)
   {
     osDelay(10);
 
-    uint16_t current_snap[3] = {0};
-
     // Enter an uniterupted task where voltage read and current
     // snapshots are taken from their DMA's
     taskENTER_CRITICAL();
     AMC130M03_Data_t snap = g_adc.latest;
-    memcpy(current_snap, current_raw, sizeof(current_raw));
+    current_snap[0] = current_raw[0];
+    current_snap[1] = current_raw[1];
+    current_snap[2] = current_raw[2];
     taskEXIT_CRITICAL();
 
     // Parse voltage and add to averaging struct

@@ -91,6 +91,8 @@ void Error_Handler(void);
 #define RED_LED_GPIO_Port GPIOB
 #define GRN_LED_Pin GPIO_PIN_12
 #define GRN_LED_GPIO_Port GPIOB
+#define SERVO3_Pin GPIO_PIN_15
+#define SERVO3_GPIO_Port GPIOA
 #define SERVO2_Pin GPIO_PIN_3
 #define SERVO2_GPIO_Port GPIOB
 #define SERVO1_Pin GPIO_PIN_4

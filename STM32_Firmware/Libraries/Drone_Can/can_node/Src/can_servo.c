@@ -21,10 +21,10 @@ void handle_SERVO_RawCommand(CanardInstance *ins, CanardRxTransfer *transfer)
             switch (cmd.commands.data[i].command_type) {
                 case UAVCAN_EQUIPMENT_ACTUATOR_COMMAND_COMMAND_TYPE_UNITLESS:
                     // Map servo command from -1 to 1 -> 1000 to 2000
-                    servos[i].servo_cmd = (cmd.commands.data[i].command_value * 500) + 1500;
+                    servos[i].servo_cmd = (cmd.commands.data[ch].command_value * 500) + 1500;
                     break;
                 case UAVCAN_EQUIPMENT_ACTUATOR_COMMAND_COMMAND_TYPE_PWM:
-                    servos[i].servo_cmd = (cmd.commands.data[i].command_value-1500)/500.0;
+                    servos[i].servo_cmd = (cmd.commands.data[ch].command_value-1500)/500.0;
                     break;
             }
             servos[i].last_update++;
