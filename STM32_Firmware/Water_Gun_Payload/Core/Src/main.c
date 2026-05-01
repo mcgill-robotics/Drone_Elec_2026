@@ -19,6 +19,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "cmsis_os.h"
+#include "stm32g4xx_hal_gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -42,9 +43,6 @@ uint32_t servo_error = 0;
 
 /* Private variables ---------------------------------------------------------*/
 FDCAN_HandleTypeDef hfdcan1;
-
-TIM_HandleTypeDef htim2;
-TIM_HandleTypeDef htim3;
 
 /* Definitions for CanStatus */
 osThreadId_t CanStatusHandle;
@@ -74,10 +72,10 @@ const osThreadAttr_t LedBlink_attributes = {
   .priority = (osPriority_t) osPriorityLow6,
   .stack_size = 128 * 4
 };
-/* Definitions for ServoUpdate */
-osThreadId_t ServoUpdateHandle;
-const osThreadAttr_t ServoUpdate_attributes = {
-  .name = "ServoUpdate",
+/* Definitions for MotorUpdate */
+osThreadId_t MotorUpdateHandle;
+const osThreadAttr_t MotorUpdate_attributes = {
+  .name = "MotorUpdate",
   .priority = (osPriority_t) osPriorityAboveNormal4,
   .stack_size = 256 * 4
 };
@@ -101,13 +99,11 @@ const osMutexAttr_t CanardlibMutex_attributes = {
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_FDCAN1_Init(void);
-static void MX_TIM3_Init(void);
-static void MX_TIM2_Init(void);
 void StartCanStatus(void *argument);
 void StartCanRx(void *argument);
 void StartCanTx(void *argument);
 void StartLedBlink(void *argument);
-void StartServoUpdate(void *argument);
+void StartMotorUpdate(void *argument);
 void StartErrorLED(void *argument);
 
 /* USER CODE BEGIN PFP */
@@ -116,23 +112,14 @@ void StartErrorLED(void *argument);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-void write_servo(int8_t i, uint16_t crr){
-  switch(i){
-    case 0:
-      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1 , crr);
-      servo_error &= ~(1u << 30);
-      break;
-    case 1:
-      __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2 , crr);
-      servo_error &= ~(1u << 30);
-      break;
-    case 2:
-      __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1 , crr);
-      servo_error &= ~(1u << 30);
-      break;
-    default:
-      servo_error |= (1u << 30);
-      break;
+void motor_fire(bool status){
+  if (status) {
+    HAL_GPIO_WritePin(MOTOR_GPIO_Port, MOTOR_Pin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(SOLENOID_GPIO_Port, SOLENOID_Pin, GPIO_PIN_SET);
+  }
+  else {
+    HAL_GPIO_WritePin(MOTOR_GPIO_Port, MOTOR_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(SOLENOID_GPIO_Port, SOLENOID_Pin, GPIO_PIN_RESET);
   }
 }
 /* USER CODE END 0 */
@@ -167,10 +154,7 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_FDCAN1_Init();
-  MX_TIM3_Init();
-  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
-
 
   // Setup canbus interupt
   HAL_FDCAN_ConfigInterruptLines(&hfdcan1, FDCAN_IT_GROUP_RX_FIFO0, FDCAN_INTERRUPT_LINE0);
@@ -181,12 +165,6 @@ int main(void)
 
   // Start Canbus
   HAL_FDCAN_Start(&hfdcan1);
-
-  // Start PWM channels
-  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
-  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
-  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
-
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -224,8 +202,8 @@ int main(void)
   /* creation of LedBlink */
   LedBlinkHandle = osThreadNew(StartLedBlink, NULL, &LedBlink_attributes);
 
-  /* creation of ServoUpdate */
-  ServoUpdateHandle = osThreadNew(StartServoUpdate, NULL, &ServoUpdate_attributes);
+  /* creation of MotorUpdate */
+  MotorUpdateHandle = osThreadNew(StartMotorUpdate, NULL, &MotorUpdate_attributes);
 
   /* creation of ErrorLED */
   ErrorLEDHandle = osThreadNew(StartErrorLED, NULL, &ErrorLED_attributes);
@@ -343,108 +321,6 @@ static void MX_FDCAN1_Init(void)
 }
 
 /**
-  * @brief TIM2 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM2_Init(void)
-{
-
-  /* USER CODE BEGIN TIM2_Init 0 */
-
-  /* USER CODE END TIM2_Init 0 */
-
-  TIM_MasterConfigTypeDef sMasterConfig = {0};
-  TIM_OC_InitTypeDef sConfigOC = {0};
-
-  /* USER CODE BEGIN TIM2_Init 1 */
-
-  /* USER CODE END TIM2_Init 1 */
-  htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 51;
-  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 65383;
-  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_PWM_Init(&htim2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 0;
-  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
-  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM2_Init 2 */
-
-  /* USER CODE END TIM2_Init 2 */
-  HAL_TIM_MspPostInit(&htim2);
-
-}
-
-/**
-  * @brief TIM3 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM3_Init(void)
-{
-
-  /* USER CODE BEGIN TIM3_Init 0 */
-
-  /* USER CODE END TIM3_Init 0 */
-
-  TIM_MasterConfigTypeDef sMasterConfig = {0};
-  TIM_OC_InitTypeDef sConfigOC = {0};
-
-  /* USER CODE BEGIN TIM3_Init 1 */
-
-  /* USER CODE END TIM3_Init 1 */
-  htim3.Instance = TIM3;
-  htim3.Init.Prescaler = 51;
-  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 65383;
-  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 0;
-  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
-  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM3_Init 2 */
-
-  /* USER CODE END TIM3_Init 2 */
-  HAL_TIM_MspPostInit(&htim3);
-
-}
-
-/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -462,14 +338,24 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOA_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, RED_LED_Pin|GRN_LED_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, GRN_LED_Pin|RED_LED_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pins : RED_LED_Pin GRN_LED_Pin */
-  GPIO_InitStruct.Pin = RED_LED_Pin|GRN_LED_Pin;
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOA, MOTOR_Pin|SOLENOID_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pins : GRN_LED_Pin RED_LED_Pin */
+  GPIO_InitStruct.Pin = GRN_LED_Pin|RED_LED_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : MOTOR_Pin SOLENOID_Pin */
+  GPIO_InitStruct.Pin = MOTOR_Pin|SOLENOID_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -477,7 +363,6 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-
 uint32_t introduce_jitter(uint32_t range_ms){
   int32_t uid = HAL_GetUIDw0() ^ HAL_GetUIDw1() ^ HAL_GetUIDw2();
   return uid % range_ms;
@@ -495,7 +380,6 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t flags){
   vTaskNotifyGiveFromISR(CanRxHandle, &woken);
   portYIELD_FROM_ISR(woken);
 }
-
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartCanStatus */
@@ -648,21 +532,20 @@ void StartLedBlink(void *argument)
   /* USER CODE END StartLedBlink */
 }
 
-/* USER CODE BEGIN Header_StartServoUpdate */
+/* USER CODE BEGIN Header_StartMotorUpdate */
 /**
-* @brief Function implementing the ServoUpdate thread.
+* @brief Function implementing the MotorUpdate thread.
 * @param argument: Not used
 * @retval None
 */
-/* USER CODE END Header_StartServoUpdate */
-void StartServoUpdate(void *argument)
+/* USER CODE END Header_StartMotorUpdate */
+void StartMotorUpdate(void *argument)
 {
-  /* USER CODE BEGIN StartServoUpdate */
+  /* USER CODE BEGIN StartMotorUpdate */
   (void) argument;
   osDelay(introduce_jitter(1000));
   uint32_t ticks = osKernelGetTickCount();
   update_tracking servo_status[SERVO_COUNT] = {0};
-  uint16_t pulse = 0;
   /* Infinite loop */
   for(;;)
   {
@@ -674,25 +557,21 @@ void StartServoUpdate(void *argument)
         servo_status[i].update_failed_count = 0;
         servo_status[i].update_without_fault ++;
         if (servo_status[i].update_without_fault > 50) servo_error &= ~(1u << i);
-
         // If servo command large spin one way, if small spin the other, else do nothing
-        if (servos[i].servo_cmd > SERVO_UPPER_LIMIT) pulse = SERVO_SPIN_CLKWISE;
-        else if (servos[i].servo_cmd < SERVO_LOWER_LIMIT) pulse = SERVO_SPIN_CNTCLKWISE;
-        else pulse = 0;
-        write_servo(i, pulse);
+        (servos[i].servo_cmd > SERVO_UPPER_LIMIT) ? motor_fire(true) : motor_fire(false);
       }
       else {
         servo_status[i].update_failed_count ++;
         servo_status[i].update_without_fault = 0;
         if (servo_status[i].update_failed_count >= ALLOWED_SERVO_FAILS) {
+          motor_fire(false);
           servo_error |= (1u << i);
-          write_servo(i, 0);
         }
       }
       servo_status[i].last_update = servos[i].last_update;
     } 
   }
-  /* USER CODE END StartServoUpdate */
+  /* USER CODE END StartMotorUpdate */
 }
 
 /* USER CODE BEGIN Header_StartErrorLED */
