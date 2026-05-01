@@ -331,6 +331,13 @@ static void on_transfer_received(CanardInstance *ins, CanardRxTransfer *transfer
         case UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_ID:
             handle_DNA_Allocation(ins, transfer);
             break;
+
+        case UAVCAN_EQUIPMENT_SAFETY_ARMINGSTATUS_ID:
+                // Only handle command once we have a node ID
+                if (canardGetLocalNodeID(&canard) != CANARD_BROADCAST_NODE_ID) {
+                    handle_arm_status(ins, transfer);
+                }
+                break;
         
         #ifdef USE_ESC
             case UAVCAN_EQUIPMENT_ESC_RAWCOMMAND_ID:
@@ -378,6 +385,10 @@ static bool should_accept_transfer(const CanardInstance *ins,
         switch (data_type_id) {
         case UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_ID:
             *out_data_type_signature = UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_SIGNATURE;
+            return 1;
+
+        case UAVCAN_EQUIPMENT_SAFETY_ARMINGSTATUS_ID:
+            *out_data_type_signature = UAVCAN_EQUIPMENT_SAFETY_ARMINGSTATUS_SIGNATURE;
             return 1;
 
         #ifdef USE_ESC 

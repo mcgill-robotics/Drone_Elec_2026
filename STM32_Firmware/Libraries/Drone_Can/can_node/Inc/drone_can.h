@@ -18,3 +18,5 @@
 #include <can_esc.h>
 
 #include <can_servo.h>
+
+#include <can_arm.h>

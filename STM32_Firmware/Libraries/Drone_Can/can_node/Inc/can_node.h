@@ -14,6 +14,7 @@
 // Private file include
 #include <canard.h>
 #include <dronecan_msgs.h>
+#include <can_arm.h>
 
 // If configured include esc library
 #ifdef USE_ESC
