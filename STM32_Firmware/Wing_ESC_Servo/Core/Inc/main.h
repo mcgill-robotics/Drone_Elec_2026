@@ -46,13 +46,16 @@ extern "C" {
 #define SERVO_PULSE_MAX 6538
 #define SERVO_PULSE_MIN 3269
 
+
 // Servo input from canbus min and max for map function
 #define SERVO_CAN_MAX 2000
 #define SERVO_CAN_MIN 1000
 
 // ESC output pulse max and min for pwm timer map function
-#define ESC_PULSE_MAX 48570
-#define ESC_PULSE_MIN 24285
+//#define ESC_PULSE_MAX 48570
+//#define ESC_PULSE_MIN 24285
+#define ESC_PULSE_MAX 6538   // 2000µs → full throttle
+#define ESC_PULSE_MIN 3269   // 1000µs → disarmed/min
 
 // ESC input from canbus min and max for map function
 #define ESC_CAN_MAX 8191

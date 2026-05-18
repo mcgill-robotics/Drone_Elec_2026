@@ -51,7 +51,7 @@ Library supports the following dronecan devices
 #define USE_SERVO
 
 // Define number of connected servos
-#define SERVO_COUNT 2
+#define SERVO_COUNT 0
 
 // Set a different value per device so they don't read from same servo channel:
 // EX: if servo_count = 2
