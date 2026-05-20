@@ -41,7 +41,7 @@ Library supports the following dronecan devices
 //   Device 0: ESC_CHANNEL_OFFSET 0  → channels 0, 1
 //   Device 1: ESC_CHANNEL_OFFSET 2  → channels 2, 3
 //   Device 2: ESC_CHANNEL_OFFSET 4  → channels 4, 5
-#define ESC_CHANNEL_OFFSET  0
+#define ESC_CHANNEL_OFFSET  2
 
 
 //----------------------------------------------------------------------------------
