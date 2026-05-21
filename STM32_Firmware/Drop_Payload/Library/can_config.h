@@ -35,13 +35,13 @@ Library supports the following dronecan devices
 // #define USE_ESC
 
 // Define number of connected esc's
-#define ESC_COUNT 2
+#define ESC_COUNT 1
 
 // Set a different value per device so they don't read from same esc channel:
 //   Device 0: ESC_CHANNEL_OFFSET 0  → channels 0, 1
 //   Device 1: ESC_CHANNEL_OFFSET 2  → channels 2, 3
 //   Device 2: ESC_CHANNEL_OFFSET 4  → channels 4, 5
-#define ESC_CHANNEL_OFFSET  2
+#define ESC_CHANNEL_OFFSET  5
 
 
 //----------------------------------------------------------------------------------

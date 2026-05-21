@@ -88,6 +88,20 @@ const osThreadAttr_t ErrorLED_attributes = {
   .priority = (osPriority_t) osPriorityLow7,
   .stack_size = 128 * 4
 };
+/* Definitions for EscStatus */
+osThreadId_t EscStatusHandle;
+const osThreadAttr_t EscStatus_attributes = {
+  .name = "EscStatus",
+  .priority = (osPriority_t) osPriorityBelowNormal,
+  .stack_size = 256 * 4
+};
+/* Definitions for EscUpdate */
+osThreadId_t EscUpdateHandle;
+const osThreadAttr_t EscUpdate_attributes = {
+  .name = "EscUpdate",
+  .priority = (osPriority_t) osPriorityHigh,
+  .stack_size = 256 * 4
+};
 /* Definitions for CanardlibMutex */
 osMutexId_t CanardlibMutexHandle;
 const osMutexAttr_t CanardlibMutex_attributes = {
@@ -109,6 +123,8 @@ void StartCanTx(void *argument);
 void StartLedBlink(void *argument);
 void StartServoUpdate(void *argument);
 void StartErrorLED(void *argument);
+void StartEscStatus(void *argument);
+void StartEscUpdate(void *argument);
 
 /* USER CODE BEGIN PFP */
 
@@ -229,6 +245,12 @@ int main(void)
 
   /* creation of ErrorLED */
   ErrorLEDHandle = osThreadNew(StartErrorLED, NULL, &ErrorLED_attributes);
+
+  /* creation of EscStatus */
+  EscStatusHandle = osThreadNew(StartEscStatus, NULL, &EscStatus_attributes);
+
+  /* creation of EscUpdate */
+  EscUpdateHandle = osThreadNew(StartEscUpdate, NULL, &EscUpdate_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -717,6 +739,87 @@ void StartErrorLED(void *argument)
     }
   }
   /* USER CODE END StartErrorLED */
+}
+
+/* USER CODE BEGIN Header_StartEscStatus */
+/**
+* @brief Function implementing the EscStatus thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartEscStatus */
+void StartEscStatus(void *argument)
+{
+  /* USER CODE BEGIN StartEscStatus */
+  (void) argument;
+  osDelay(introduce_jitter(1000));
+  uint32_t ticks = osKernelGetTickCount();
+  /* Infinite loop */
+  for(;;)
+  {
+    // Send status at 10hz
+    ticks += 100U;
+    osDelayUntil(ticks);
+
+    // Aquire mutex
+    if (osMutexAcquire(CanardlibMutexHandle, osWaitForever) == osOK){
+      // Send status
+      send_esc_status();
+      osMutexRelease(CanardlibMutexHandle);
+    }
+    xTaskNotifyGive(CanTxHandle);
+  }
+  
+  /* USER CODE END StartEscStatus */
+}
+
+/* USER CODE BEGIN Header_StartEscUpdate */
+/**
+* @brief Function implementing the EscUpdate thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartEscUpdate */
+void StartEscUpdate(void *argument)
+{
+  /* USER CODE BEGIN StartEscUpdate */
+  (void) argument;
+  osDelay(introduce_jitter(1000));
+  uint32_t ticks = osKernelGetTickCount();
+  update_tracking esc_status[ESC_COUNT] = {0};
+  uint16_t pulse = 0;
+  /* Infinite loop */
+  for(;;)
+  {
+    // Update at 200hz
+    ticks += 5;
+    osDelayUntil(ticks);
+    for(int i = 0; i < ESC_COUNT; i++){
+      if (esc[i].last_update !=esc_status[i].last_update){
+        esc_status[i].update_failed_count = 0;
+        esc_status[i].update_without_fault ++;
+        if (esc_status[i].update_without_fault > 200) servo_error &= ~(1u << 5);
+        // If servo command large spin one way, if small spin the other, else do nothing
+        if (esc[i].last_update > SERVO_UPPER_LIMIT) pulse = SERVO_SPIN_CLKWISE;
+        else if (esc[i].last_update < SERVO_LOWER_LIMIT) pulse = SERVO_SPIN_CNTCLKWISE;
+        else pulse = 0;
+        write_servo(1, pulse);
+        write_servo(2, pulse);
+      }
+      else {
+        esc_status[i].update_failed_count ++;
+        esc_status[i].update_without_fault = 0;
+        if (esc_status[i].update_failed_count >= ALLOWED_SERVO_FAILS) {
+          servo_error |= (1u << 5);
+          write_servo(1, pulse);
+          write_servo(2, pulse);
+        }
+      }
+      esc_status[i].last_update = esc[i].last_update;
+    }
+  
+  }
+  /* USER CODE END StartEscUpdate */
 }
 
 /**
