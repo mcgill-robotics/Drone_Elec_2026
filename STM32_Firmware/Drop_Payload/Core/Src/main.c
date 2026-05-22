@@ -701,14 +701,18 @@ void StartServoUpdate(void *argument)
         if (servos[i].servo_cmd > SERVO_UPPER_LIMIT) pulse = SERVO_SPIN_CLKWISE;
         else if (servos[i].servo_cmd < SERVO_LOWER_LIMIT) pulse = SERVO_SPIN_CNTCLKWISE;
         else pulse = 0;
-        write_servo(i, pulse);
+        write_servo(0, pulse);
+        write_servo(1, pulse);
+        write_servo(2, pulse);
       }
       else {
         servo_status[i].update_failed_count ++;
         servo_status[i].update_without_fault = 0;
         if (servo_status[i].update_failed_count >= ALLOWED_SERVO_FAILS) {
           servo_error |= (1u << i);
-          write_servo(i, 0);
+          write_servo(0, 0);
+          write_servo(1, 0);
+          write_servo(2, 0);
         }
       }
       servo_status[i].last_update = servos[i].last_update;
@@ -751,23 +755,24 @@ void StartErrorLED(void *argument)
 void StartEscStatus(void *argument)
 {
   /* USER CODE BEGIN StartEscStatus */
-  (void) argument;
-  osDelay(introduce_jitter(1000));
-  uint32_t ticks = osKernelGetTickCount();
-  /* Infinite loop */
+  // (void) argument;
+  // osDelay(introduce_jitter(1000));
+  // uint32_t ticks = osKernelGetTickCount();
+  // /* Infinite loop */
   for(;;)
   {
+    osDelay(1000);
     // Send status at 10hz
-    ticks += 100U;
-    osDelayUntil(ticks);
+    // ticks += 100U;
+    // osDelayUntil(ticks);
 
-    // Aquire mutex
-    if (osMutexAcquire(CanardlibMutexHandle, osWaitForever) == osOK){
-      // Send status
-      send_esc_status();
-      osMutexRelease(CanardlibMutexHandle);
-    }
-    xTaskNotifyGive(CanTxHandle);
+    // // Aquire mutex
+    // if (osMutexAcquire(CanardlibMutexHandle, osWaitForever) == osOK){
+    //   // Send status
+    //   send_esc_status();
+    //   osMutexRelease(CanardlibMutexHandle);
+    // }
+    // xTaskNotifyGive(CanTxHandle);
   }
   
   /* USER CODE END StartEscStatus */
@@ -783,40 +788,41 @@ void StartEscStatus(void *argument)
 void StartEscUpdate(void *argument)
 {
   /* USER CODE BEGIN StartEscUpdate */
-  (void) argument;
-  osDelay(introduce_jitter(1000));
-  uint32_t ticks = osKernelGetTickCount();
-  update_tracking esc_status[ESC_COUNT] = {0};
-  uint16_t pulse = 0;
+  // (void) argument;
+  // osDelay(introduce_jitter(1000));
+  // uint32_t ticks = osKernelGetTickCount();
+  // update_tracking esc_status[ESC_COUNT] = {0};
+  // uint16_t pulse = 0;
   /* Infinite loop */
   for(;;)
   {
+    osDelay(1000);
     // Update at 200hz
-    ticks += 5;
-    osDelayUntil(ticks);
-    for(int i = 0; i < ESC_COUNT; i++){
-      if (esc[i].last_update !=esc_status[i].last_update){
-        esc_status[i].update_failed_count = 0;
-        esc_status[i].update_without_fault ++;
-        if (esc_status[i].update_without_fault > 200) servo_error &= ~(1u << 5);
-        // If servo command large spin one way, if small spin the other, else do nothing
-        if (esc[i].last_update > SERVO_UPPER_LIMIT) pulse = SERVO_SPIN_CLKWISE;
-        else if (esc[i].last_update < SERVO_LOWER_LIMIT) pulse = SERVO_SPIN_CNTCLKWISE;
-        else pulse = 0;
-        write_servo(1, pulse);
-        write_servo(2, pulse);
-      }
-      else {
-        esc_status[i].update_failed_count ++;
-        esc_status[i].update_without_fault = 0;
-        if (esc_status[i].update_failed_count >= ALLOWED_SERVO_FAILS) {
-          servo_error |= (1u << 5);
-          write_servo(1, pulse);
-          write_servo(2, pulse);
-        }
-      }
-      esc_status[i].last_update = esc[i].last_update;
-    }
+    // ticks += 5;
+    // osDelayUntil(ticks);
+    // for(int i = 0; i < ESC_COUNT; i++){
+    //   if (esc[i].last_update !=esc_status[i].last_update){
+    //     esc_status[i].update_failed_count = 0;
+    //     esc_status[i].update_without_fault ++;
+    //     if (esc_status[i].update_without_fault > 200) servo_error &= ~(1u << 5);
+    //     // If servo command large spin one way, if small spin the other, else do nothing
+    //     if (esc[i].last_update > SERVO_UPPER_LIMIT) pulse = SERVO_SPIN_CLKWISE;
+    //     else if (esc[i].last_update < SERVO_LOWER_LIMIT) pulse = SERVO_SPIN_CNTCLKWISE;
+    //     else pulse = 0;
+    //     write_servo(1, pulse);
+    //     write_servo(2, pulse);
+    //   }
+    //   else {
+    //     esc_status[i].update_failed_count ++;
+    //     esc_status[i].update_without_fault = 0;
+    //     if (esc_status[i].update_failed_count >= ALLOWED_SERVO_FAILS) {
+    //       servo_error |= (1u << 5);
+    //       write_servo(1, pulse);
+    //       write_servo(2, pulse);
+    //     }
+    //   }
+    //   esc_status[i].last_update = esc[i].last_update;
+    // }
   
   }
   /* USER CODE END StartEscUpdate */
