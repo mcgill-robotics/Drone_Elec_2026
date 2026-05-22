@@ -40,6 +40,8 @@ extern "C" {
 // till it enters a zero state
 #define ALLOWED_SERVO_FAILS 5
 
+#define SERVO_CENTER 4904 
+
 // Servo Min input value to spin clockwise
 #define SERVO_UPPER_LIMIT 1650
 

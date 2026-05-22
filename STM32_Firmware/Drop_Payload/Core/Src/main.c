@@ -698,21 +698,17 @@ void StartServoUpdate(void *argument)
         if (servo_status[i].update_without_fault > 50) servo_error &= ~(1u << i);
 
         // If servo command large spin one way, if small spin the other, else do nothing
-        if (servos[i].servo_cmd > SERVO_UPPER_LIMIT) pulse = SERVO_SPIN_CLKWISE;
+        if (servos[i].servo_cmd > SERVO_UPPER_LIMIT) pulse = SERVO_SPIN_CLKWISE ;
         else if (servos[i].servo_cmd < SERVO_LOWER_LIMIT) pulse = SERVO_SPIN_CNTCLKWISE;
-        else pulse = 0;
-        write_servo(0, pulse);
-        write_servo(1, pulse);
-        write_servo(2, pulse);
+        else pulse = SERVO_CENTER;
+        write_servo(i, pulse);
       }
       else {
         servo_status[i].update_failed_count ++;
         servo_status[i].update_without_fault = 0;
         if (servo_status[i].update_failed_count >= ALLOWED_SERVO_FAILS) {
           servo_error |= (1u << i);
-          write_servo(0, 0);
-          write_servo(1, 0);
-          write_servo(2, 0);
+          write_servo(i, 0);
         }
       }
       servo_status[i].last_update = servos[i].last_update;
