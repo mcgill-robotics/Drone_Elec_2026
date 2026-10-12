@@ -7,6 +7,8 @@ Canbus library to implement the following functionality with stm32g4:\
 4. Voltage and current measurement over Canbus
 <br>
 
+Used by every project under [STM32_Firmware](../../README.md): [Camera_Gimbal_O3](../../Camera_Gimbal_O3/README.md), [Drop_Payload](../../Drop_Payload/README.md), [Voltage_Current_Sense](../../Voltage_Current_Sense/README.md), [Water_Gun_Payload](../../Water_Gun_Payload/README.md), and [Wing_ESC_Servo](../../Wing_ESC_Servo/README.md) — see any of those for a concrete example of this library wired into a real node.
+
 ## File structure
 **UAVCAN_DSDL:** Scripts generate using a python file found in Libraries/DSDL_Generator which include all the message definitions for libcanard.
 

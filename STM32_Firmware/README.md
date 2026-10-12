@@ -3,19 +3,19 @@ All firmware code used in 2025/26 drone "Benu"
 <br>
 
 ## Libraries
-This folder includes the dronecan library such that it can be referenced by all the stm32 projects in this directory. It includes two files: 
+This folder includes the dronecan library such that it can be referenced by all the stm32 projects in this directory. It includes two folders:
 
-1. **Drone_Can** The library file itself which is a mix of existing dronecan library and custom scripts. See it's README file for more information.
+1. [**Drone_Can**](Libraries/Drone_Can/README.md) The library file itself which is a mix of existing dronecan library and custom scripts. See its README for the full API and the steps to wire it into a new project.
 
-2. **DSDL_Generator** this is a series of cloned repos from drone can which allow the DSDL files to be generated. These files include all the definitions for different dronecan devices (ie. servo, motor, battery, etc.). The output files produced from running the python script in a virtual environment (venv) are copied into the Drone_Can library under UAVCAN_DSDL
+2. [**DSDL_Generator**](Libraries/DSDL_Generator/README.md) this is a series of cloned repos from drone can which allow the DSDL files to be generated. These files include all the definitions for different dronecan devices (ie. servo, motor, battery, etc.). The output files produced from running the python script in a virtual environment (venv) are copied into the Drone_Can library under UAVCAN_DSDL
 
 **Note:** dronecan and uavcan will be used interchangably. UAVCAN version 0 has been renamed to dronecan and UAVCAN version 1 has been renamed cyphal. PX4 has limited support for cyphal.
 <br>
 
 ## STM32 Projects
-All of these devices use the dronecan library and an stm32g4 chip. The library was built around using freeRTOS to ensure all task occur with deterministic timing. 
+All of these devices use the dronecan library and an stm32g431cb chip. The library was built around using freeRTOS to ensure all task occur with deterministic timing. Each project below has its own README with the full CAN configuration, actuator mapping, and FreeRTOS task breakdown.
 
-### Camera_Gimbal_O3
+### [Camera_Gimbal_O3](Camera_Gimbal_O3/README.md)
 **Note:** this project is not currently used for 2025/26 as we ran out of time. The code is written but untested. For this year, the gimbal is controlled using the Wing_ESC_Servo code and the O3 air unit is armed manually.
 <br>
 
@@ -25,23 +25,21 @@ This code has two purposes:
 
 This uses servo array location 5 and 6. The PX4 pulishes an array of servos ranging from 0 to 7.
 
-### Drop_Payload
+### [Drop_Payload](Drop_Payload/README.md)
 
-This uses a canbus to pwm circuit board to release the payload after reaching the target. Code is nearly identical to Wing_ESC_Servo.
+This uses a canbus to pwm circuit board to release the payload after reaching the target. It drives up to three continuous-rotation release servos bang-bang (spin/spin-the-other-way/stop) rather than proportionally, currently mapped to CAN servo array locations 0–2 so up to three payloads can be released independently.
 
-This uses servo array location 7 as the drone can only carry one payload, but more could be added by doing something like servo[7] > 1500 means drop payload 2 and servo[7] < 1500 means drop payload 1. The PX4 pulishes an array of servos ranging from 0 to 7.
-
-### Voltage_Current_Sense
+### [Voltage_Current_Sense](Voltage_Current_Sense/README.md)
 
 Uses the voltage measurement pcb to measure voltage of each battery and current draw from each of the 50v series pairs. The current measurement is done by reading the analog output from 0 to 3.3v of the Texas Instruments current measurement device, averaging it, and sending it over canbus. The voltage measurement uses a Texas Instuments isolated delta-sigma ADC to safely read the voltage of the batteries, averages and scales it, then sends it over canbus. Currently only sending one pack voltage and the sum of currents has been setup, not each individual cell.
 
 **Note:** both voltage and current measurements seem to be scaled incorrectly.
 
-### Water_Gun_Payload
+### [Water_Gun_Payload](Water_Gun_Payload/README.md)
 
-Uses the water_gun pcb to control a water pump and water solenoid. When the servo input command is greater than 1650 it turns on the water pump and solenoid. It uses the same servo 7 input command as the drop_payload as only one will ever be plugged in at once.
+Uses the water_gun pcb to control a water pump and water solenoid. When the servo input command is greater than 1650 it turns on the water pump and solenoid. It uses servo array location 7, the same slot Drop_Payload used before being remapped to 0–2, since only one payload board is ever plugged in at once.
 
-### Wing_ESC_Servo
+### [Wing_ESC_Servo](Wing_ESC_Servo/README.md)
 
 Uses the canbus to PWM pcb to control the servos and motors in the drone's wing and tail. It recieves the motor and servo comands over canbus and converts that to pwm for improved signal integrity and simplified wiring. 
 
